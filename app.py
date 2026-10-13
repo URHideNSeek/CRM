@@ -67,7 +67,7 @@ def select_existing(label, values, current, key=None):
 
 def show_table(rows):
     if rows:
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
     else:
         st.info("No records yet. Add a record or import your existing CRM files.")
 

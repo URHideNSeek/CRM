@@ -30,8 +30,9 @@ def generate(db, as_of=None, horizon=2):
             insert(Reminder)
             .values(task_id=task.id, day=as_of, due_snapshot=task.due_date)
             .on_conflict_do_nothing(index_elements=["task_id", "day", "due_snapshot"])
+            .returning(Reminder.id)
         )
-        count += result.rowcount
+        count += len(result.scalars().all())
     return count
 
 

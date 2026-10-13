@@ -27,3 +27,16 @@ jobs:
       - run: ruff check .
       - run: alembic upgrade head
       - run: pytest -q
+      - name: Build deployment image
+        run: docker build -t ur-crm-ci .
+      - name: Check container worker and app
+        run: |
+          docker run --rm --network host -e DATABASE_URL -e AUTH_MODE --entrypoint python ur-crm-ci -m crm.reminders
+          docker run -d --name crm-smoke --network host -e DATABASE_URL -e AUTH_MODE ur-crm-ci
+          trap 'docker rm -f crm-smoke' EXIT
+          for attempt in {1..30}; do
+            if curl -fsS http://localhost:8501/_stcore/health; then exit 0; fi
+            sleep 1
+          done
+          docker logs crm-smoke
+          exit 1
