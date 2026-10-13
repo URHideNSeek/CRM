@@ -9,3 +9,5 @@ __pycache__/
 backups/
 data/
 import-review.json
+.secrets/
+compose.override.yaml

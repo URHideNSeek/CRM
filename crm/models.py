@@ -167,3 +167,14 @@ class Source(Record, Base):
     kind: Mapped[str] = mapped_column(String(100), default="chat")
     date_range: Mapped[str] = mapped_column(Text, default="")
     notes: Mapped[str] = mapped_column(Text, default="")
+
+
+class ApiReceipt(Base):
+    __tablename__ = "api_receipts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    principal: Mapped[str] = mapped_column(String(150))
+    key: Mapped[str] = mapped_column(String(100))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    response: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("principal", "key", name="uq_api_receipt"),)

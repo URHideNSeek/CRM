@@ -40,3 +40,16 @@ jobs:
           done
           docker logs crm-smoke
           exit 1
+      - name: Check API container authentication
+        run: |
+          docker run -d --name crm-api-smoke --network host -e DATABASE_URL --entrypoint python ur-crm-ci -m uvicorn crm.api:app --host 127.0.0.1 --port 8000 --no-access-log
+          trap 'docker rm -f crm-api-smoke' EXIT
+          for attempt in {1..30}; do
+            if curl -fsS http://localhost:8000/health; then
+              test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/v1/contacts)" = 401
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs crm-api-smoke
+          exit 1

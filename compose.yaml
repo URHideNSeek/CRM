@@ -43,5 +43,17 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+  api:
+    build: .
+    command: ["python", "-m", "uvicorn", "crm.api:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://crm:${POSTGRES_PASSWORD}@db:5432/crm
+      CRM_API_TOKENS_JSON: ${CRM_API_TOKENS_JSON:-[]}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 volumes:
   crm_data:

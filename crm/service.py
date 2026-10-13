@@ -109,8 +109,8 @@ def save_contact(db, *, contact_id=None, expected_version=None, used_channels=No
     return item
 
 
-def contacts(db, search="", captured=None, used=None, kind=None, owner=None):
-    query = select(Contact).order_by(Contact.name)
+def contacts(db, search="", captured=None, used=None, kind=None, owner=None, *, limit=None, offset=0):
+    query = select(Contact).order_by(Contact.name, Contact.id)
     if search:
         # Treat search text literally rather than letting % match the entire database.
         term = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -130,6 +130,8 @@ def contacts(db, search="", captured=None, used=None, kind=None, owner=None):
         query = query.where(Contact.relationship_type == kind)
     if owner:
         query = query.where(Contact.owner == owner)
+    if limit is not None:
+        query = query.offset(offset).limit(limit)
     return list(db.scalars(query))
 
 

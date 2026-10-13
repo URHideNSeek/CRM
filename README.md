@@ -117,3 +117,14 @@ GitHub Actions runs migrations and the full suite on PostgreSQL 17. Local tests 
 
 - [Streamlit OIDC authentication](https://docs.streamlit.io/develop/concepts/connections/authentication)
 - [SQLAlchemy PostgreSQL dialect](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html)
+
+## Channel API (v0.2)
+
+The authenticated API supports shared contact search, capture/usage-channel filters, contact edits, append-only interactions, owned follow-ups, version-checked updates and a reminder digest. Writes require persistent idempotency keys so retries do not create duplicate history/tasks. Credentials establish the originating workstream; they do not restrict which contacts that workstream can access.
+
+Compose now starts the API on `http://localhost:8000`. It denies access until API credentials are configured. Use HTTPS for hosted integrations. This is an integration interface, not an automatically installed ChatGPT connector.
+
+- [Channel API setup, endpoint reference and retry-safe example](docs/channel-integration.md)
+- [Existing-host deployment requirements and instructions](docs/hosting.md)
+
+The app, reminder worker and API share the PostgreSQL database. The daily reminder feed is ready for a delivery adapter; external notifications still require hosting, a destination and a configured schedule.
