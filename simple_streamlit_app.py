@@ -281,34 +281,46 @@ with followup_tab:
         if (t["status"] == "Open" if timing == "All open" else bucket(t) == timing)
         and (channel == "All" or channel == t["channel"])
     ]
+    if visible:
+        a, b, c, d = st.columns([2, 2, 1.5, 4])
+        for column, heading in zip([a, b, c, d], ["Name", "Company", "Contact type", "Next follow-up"]):
+            column.markdown(f"**{heading}**")
     for task in sorted(visible, key=lambda v: v["due"] or "9999-12-31"):
         with st.container(border=True):
-            st.write(f"**{task['action']}**")
-            st.caption(
-                f"{mapping.get(task['contact_id'], 'General task')} · {task['owner']} · {task['channel']}"
-            )
-            st.write(f"{bucket(task)} · Due {task['due'] or 'not set'} · {task['priority']} priority")
             contact = next((v for v in contacts if v["id"] == task["contact_id"]), {})
-            history = sorted([v for v in interactions if task["contact_id"] and v["contact_id"] == task["contact_id"]],
-                             key=lambda v: v["date"], reverse=True)
-            last = history[0] if history else None
-            st.write("**Who:** " + (" · ".join(filter(None, [contact.get("name"), contact.get("organization")])) or task.get("target") or "General task"))
-            st.write("**Why / relationship context:** " + (task.get("reason") or contact.get("notes") or "No reason recorded; confirm the purpose before reaching out."))
-            st.write("**Last contact:** " + (f"{last['date']} — {last['summary']}" if last else "No dated interaction recorded."))
-            st.write("**Recommended next step:** " + (task.get("recommendation") or task["action"]))
-            method = task.get("method") or ("Email" if contact.get("email") else "Confirm the preferred contact method")
-            st.write("**How:** " + method)
-            st.caption("Suggested approach: reference the last conversation, state the next action, and ask one clear question. Suggestions are based on recorded context; they are not confirmed commitments.")
-            if task.get("original_status"):
-                st.caption("Recorded status: " + task["original_status"])
-            if task["status"] == "Open":
-                a, b = st.columns(2)
-                if a.button("Complete", key="done_" + task["id"]):
-                    task["status"] = "Completed"
-                    persist_and_rerun()
-                if b.button("Snooze 3 days", key="snooze_" + task["id"]):
-                    task["due"] = (now + timedelta(days=3)).isoformat()
-                    persist_and_rerun()
+            words = (task.get("short_summary") or task["action"]).split()
+            if len(words) < 5:
+                words = ("Complete the next action: " + " ".join(words)).split()
+            summary = " ".join(words[:15]) + ("…" if len(words) > 15 else "")
+            a, b, c, d = st.columns([2, 2, 1.5, 4])
+            a.write(contact.get("name", "") if contact.get("record_type") != "organization" else "")
+            b.write(contact.get("organization", ""))
+            c.write(contact.get("kind", "General task"))
+            d.write(summary)
+            with st.expander("Details", expanded=False):
+                st.write("**Full next action:** " + task["action"])
+                st.caption(f"Owner: {task['owner']} · Channel: {task['channel']}")
+                st.write(f"{bucket(task)} · Due {task['due'] or 'not set'} · {task['priority']} priority")
+                history = sorted([v for v in interactions if task["contact_id"] and v["contact_id"] == task["contact_id"]],
+                                 key=lambda v: v["date"], reverse=True)
+                last = history[0] if history else None
+                st.write("**Who:** " + (" · ".join(filter(None, [contact.get("name"), contact.get("organization")])) or task.get("target") or "General task"))
+                st.write("**Why / relationship context:** " + (task.get("reason") or contact.get("notes") or "No reason recorded; confirm the purpose before reaching out."))
+                st.write("**Last contact:** " + (f"{last['date']} — {last['summary']}" if last else "No dated interaction recorded."))
+                st.write("**Recommended next step:** " + (task.get("recommendation") or task["action"]))
+                method = task.get("method") or ("Email" if contact.get("email") else "Confirm the preferred contact method")
+                st.write("**How:** " + method)
+                st.caption("Suggested approach: reference the last conversation, state the next action, and ask one clear question. Suggestions are based on recorded context; they are not confirmed commitments.")
+                if task.get("original_status"):
+                    st.caption("Recorded status: " + task["original_status"])
+                if task["status"] == "Open":
+                    a, b = st.columns(2)
+                    if a.button("Complete", key="done_" + task["id"]):
+                        task["status"] = "Completed"
+                        persist_and_rerun()
+                    if b.button("Snooze 3 days", key="snooze_" + task["id"]):
+                        task["due"] = (now + timedelta(days=3)).isoformat()
+                        persist_and_rerun()
     if not visible:
         st.info("No follow-ups in this view.")
     with st.expander("Add follow-up"), st.form("followup"):
