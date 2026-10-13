@@ -218,6 +218,8 @@ with followup_tab:
                 f"{mapping.get(task['contact_id'], 'General task')} · {task['owner']} · {task['channel']}"
             )
             st.write(f"{bucket(task)} · Due {task['due'] or 'not set'} · {task['priority']} priority")
+            if task.get("original_status"):
+                st.caption("Recorded status: " + task["original_status"])
             if task["status"] == "Open":
                 a, b = st.columns(2)
                 if a.button("Complete", key="done_" + task["id"]):
@@ -255,9 +257,63 @@ with followup_tab:
                 )
                 st.rerun()
 
+
+def prepare_history(history):
+    if history.get("format") != "ur-chat-crm-v1":
+        raise ValueError("Choose the supplied chat-history import file.")
+    people = history["contacts"]
+    ids = {c["id"] for c in people}
+    if len(ids) != len(people):
+        raise ValueError("Duplicate contact IDs.")
+    for c in people:
+        for field in ["id", "name", "organization", "email", "kind", "captured_by", "notes"]:
+            if not isinstance(c[field], str):
+                raise ValueError("Invalid contact field.")
+        if c["kind"] not in [
+            "Vendor",
+            "Funder",
+            "Customer",
+            "Government",
+            "University",
+            "Partner",
+            "Advisor",
+            "Other",
+        ]:
+            raise ValueError("Invalid contact category.")
+        if (
+            c["captured_by"] not in CHANNELS
+            or not isinstance(c["used_by"], list)
+            or any(v not in CHANNELS for v in c["used_by"])
+        ):
+            raise ValueError("Invalid channel.")
+    notes = []
+    for source in history["conversations"]:
+        if source["contact_id"] is not None and source["contact_id"] not in ids:
+            raise ValueError("Missing linked contact.")
+        date.fromisoformat(source["date"])
+        notes.append({**source, "next_action": source.get("next_action", "")})
+    actions = []
+    for source in history["followups"]:
+        if source["contact_id"] is not None and source["contact_id"] not in ids:
+            raise ValueError("Missing linked contact.")
+        if source["due"]:
+            date.fromisoformat(source["due"])
+        actions.append(
+            {
+                **source,
+                "title": source["action"],
+                "due": source["due"] or "",
+                "original_status": source["status"],
+                "status": "Completed" if source["completed"] else "Open",
+            }
+        )
+    return {"contacts": people, "interactions": notes, "tasks": actions}
+
+
 with backup_tab:
     snapshot = {
         "format": "ur-simple-crm-v1",
+        "source_metadata": st.session_state.get("crm_source_metadata", {}),
         "contacts": contacts,
         "interactions": interactions,
         "tasks": tasks,
@@ -333,9 +389,56 @@ with backup_tab:
                     date.fromisoformat(record["due"])
             for collection in required_fields:
                 st.session_state[collection] = incoming[collection]
+            st.session_state["crm_source_metadata"] = incoming.get("source_metadata", {})
             st.rerun()
         except (ValueError, TypeError, KeyError, AttributeError):
             st.error("Invalid backup. Import a JSON backup downloaded from this app.")
     st.caption(
         "Reminders are shown while the app is open. This prototype does not send email or background notifications."
     )
+
+    st.subheader("Populate from UR chat history")
+    history_upload = st.file_uploader("CRM chat-history JSON", type="json", key="chat_history_file")
+    if st.button("Import chat history", disabled=history_upload is None):
+        try:
+            history = json.loads(history_upload.getvalue())
+            incoming = prepare_history(history)
+            # Keep existing records and remap links when the same name/org is already present.
+            mapping = {}
+            for record in incoming["contacts"]:
+                matches = [
+                    c
+                    for c in contacts
+                    if c["id"] == record["id"]
+                    or (
+                        c["name"].casefold() == record["name"].casefold()
+                        and c["organization"].casefold() == record["organization"].casefold()
+                    )
+                ]
+                if len(matches) == 1:
+                    mapping[record["id"]] = matches[0]["id"]
+                else:
+                    mapping[record["id"]] = record["id"]
+                    contacts.append(record)
+            for collection in ["interactions", "tasks"]:
+                existing_ids = {r["id"] for r in st.session_state[collection]}
+                for record in incoming[collection]:
+                    record["contact_id"] = mapping.get(record["contact_id"], record["contact_id"])
+                    if record["id"] not in existing_ids:
+                        st.session_state[collection].append(record)
+                        existing_ids.add(record["id"])
+            st.session_state["crm_source_metadata"] = {
+                k: v for k, v in history.items() if k not in ["contacts", "conversations", "followups"]
+            }
+            st.session_state["history_imported"] = True
+            st.rerun()
+        except (ValueError, TypeError, KeyError, AttributeError):
+            st.error("Invalid history file. Use the supplied UR CRM chat-history JSON.")
+    if st.session_state.get("history_imported"):
+        st.success("Chat history imported. Open Contacts, Conversations, and Follow-ups.")
+        metadata = st.session_state.get("crm_source_metadata", {})
+        st.caption(metadata.get("coverage", ""))
+        with st.expander("Organizations, suppliers, opportunities, events and review notes"):
+            for key in ["opportunities", "events", "organizations", "suppliers", "review"]:
+                st.subheader(key.capitalize())
+                st.json(metadata.get(key, []), expanded=False)
