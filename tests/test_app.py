@@ -60,3 +60,39 @@ def test_empty_workspace_pages_and_contact_creation(db, monkeypatch):
     next(b for b in app.button if b.label == "Complete follow-up").click().run()
     assert not app.exception and not app.error
     assert not any(b.label == "Complete follow-up" for b in app.button)
+
+
+def test_populated_dashboard_quick_actions_and_pipeline(db, monkeypatch):
+    from crm.models import Opportunity, Task
+    from crm.service import save_contact, today
+
+    monkeypatch.setenv("AUTH_MODE", "local")
+    contact = save_contact(db, name="Partner", used_channels=["UR Partners", "UR Private BD"])
+    db.add(
+        Opportunity(
+            name="Pilot discussion",
+            contact_id=contact.id,
+            stage="Conversation",
+            channel="UR Private BD",
+            value=10000,
+        )
+    )
+    task = Task(title="Send pilot brief", contact_id=contact.id, due_date=today())
+    db.add(task)
+    db.flush()
+
+    @contextmanager
+    def test_session():
+        yield db
+
+    monkeypatch.setattr("crm.db.session", test_session)
+    app = AppTest.from_file(str(Path(__file__).parents[1] / "app.py"), default_timeout=20).run()
+    assert not app.exception and not app.error
+    next(b for b in app.button if b.label == "Complete").click().run()
+    assert not app.exception and not app.error
+    assert task.status == "Completed"
+    next(b for b in app.button if b.label == "Open all follow-ups").click().run()
+    assert app.sidebar.radio[0].value == "Follow-ups"
+    app.sidebar.radio[0].set_value("Opportunities").run()
+    assert not app.exception and not app.error
+    assert any("Engage" in heading.value for heading in app.subheader)

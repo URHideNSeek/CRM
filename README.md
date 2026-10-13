@@ -128,3 +128,7 @@ Compose now starts the API on `http://localhost:8000`. It denies access until AP
 - [Existing-host deployment requirements and instructions](docs/hosting.md)
 
 The app, reminder worker and API share the PostgreSQL database. The daily reminder feed is ready for a delivery adapter; external notifications still require hosting, a destination and a configured schedule.
+
+## Streamlit workspace design
+
+The frontend includes a follow-up-first dashboard with attention/upcoming/undated queues, inline complete/snooze actions, owner focus, channel usage charts and recent conversations. Contact profiles surface capture/usage channels, context, linked opportunities and open-action counts. Contact lists filter by relationship, captured channel, usage channel, owner and status. The pipeline board groups opportunities into Explore, Engage, Advance and Outcomes alongside the detailed table. Native Streamlit controls provide keyboard interaction, and the layout adapts to smaller screens.

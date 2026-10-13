@@ -26,10 +26,13 @@ from crm.service import (
     today,
     update_task,
 )
+from crm.ui import chips, contact_profile, header, navigate, pipeline, style, task_cards
 
 st.set_page_config(page_title="Unseen Robotics CRM", page_icon="🧭", layout="wide")
+style()
 actor = require_user()
-st.sidebar.title("Unseen Robotics")
+st.sidebar.title("UR / CRM")
+st.sidebar.caption("RELATIONSHIPS → NEXT ACTIONS")
 page = st.sidebar.radio(
     "Workspace",
     [
@@ -43,6 +46,7 @@ page = st.sidebar.radio(
         "Reminder inbox",
         "Import & export",
     ],
+    key="workspace_page",
 )
 st.sidebar.caption("Channels classify relationships. All approved users share access.")
 if st.sidebar.button("Refresh"):
@@ -90,7 +94,7 @@ def contact_row(c):
 def task_row(t):
     return {
         "Action": t.title,
-        "Contact": t.contact.name if t.contact else "",
+        "Contact": t.contact.name if t.contact else t.legacy_data.get("related_person_or_org", ""),
         "Opportunity": t.opportunity.name if t.opportunity else "",
         "Due": t.due_date,
         "Timing": task_bucket(t),
@@ -171,7 +175,7 @@ def contact_form(db, item=None):
 
 
 def run(db):
-    st.title(page)
+    header(page)
     all_contacts = contacts(db)
     all_tasks = list(db.scalars(select(Task).order_by(Task.due_date.asc().nulls_last())))
     all_opps = list(db.scalars(select(Opportunity).order_by(Opportunity.name)))
@@ -182,18 +186,79 @@ def run(db):
     opp_labels = options(all_opps, lambda o: o.name)
     event_labels = options(all_events, lambda e: e.name)
     if page == "Overview":
-        due = [t for t in all_tasks if task_bucket(t) in {"Overdue", "Due today"}]
         a, b, c, d = st.columns(4)
         a.metric("Contacts", len(all_contacts))
         b.metric("Overdue", sum(task_bucket(t) == "Overdue" for t in all_tasks))
         c.metric("Due today", sum(task_bucket(t) == "Due today" for t in all_tasks))
         d.metric("Active opportunities", sum(o.stage not in {"Won", "Lost"} for o in all_opps))
-        st.subheader("Next actions")
-        show_table([task_row(t) for t in due])
-        st.subheader("Opportunity progress")
-        counts = Counter(o.stage for o in all_opps)
-        if counts:
-            st.bar_chart(dict(counts))
+        st.divider()
+        owner = st.selectbox(
+            "Focus on owner",
+            [None, *sorted({t.owner for t in all_tasks})],
+            format_func=lambda x: x or "Everyone",
+        )
+        scoped = [t for t in all_tasks if not owner or t.owner == owner]
+        focus, context = st.columns([1.4, 1])
+        with focus:
+            st.subheader("Your next moves")
+            tab_due, tab_week, tab_unscheduled = st.tabs(["Needs attention", "Next 7 days", "Needs a date"])
+            with tab_due:
+                task_cards(
+                    db, [t for t in scoped if task_bucket(t) in {"Overdue", "Due today"}], prefix="due"
+                )
+            with tab_week:
+                task_cards(
+                    db,
+                    [
+                        t
+                        for t in scoped
+                        if t.status == "Open"
+                        and t.due_date
+                        and today() < t.due_date <= today() + timedelta(days=7)
+                    ],
+                    prefix="week",
+                )
+            with tab_unscheduled:
+                task_cards(db, [t for t in scoped if task_bucket(t) == "Unscheduled"], prefix="undated")
+            st.button("Open all follow-ups", on_click=navigate, args=("Follow-ups",))
+        with context:
+            st.subheader("Opportunity progress")
+            counts = Counter(o.stage for o in all_opps)
+            if counts:
+                st.bar_chart(
+                    [{"Stage": k, "Count": v} for k, v in counts.items()],
+                    x="Stage",
+                    y="Count",
+                    color="#00857c",
+                )
+            else:
+                st.info("Add an opportunity to start tracking your pipeline.")
+            st.subheader("Channels using contacts")
+            usage = Counter(v.channel for c in all_contacts for v in c.used_channels)
+            if usage:
+                st.bar_chart(
+                    [{"Channel": k, "Contacts": v} for k, v in usage.items()],
+                    x="Channel",
+                    y="Contacts",
+                    color="#3d6688",
+                )
+            else:
+                st.caption("Assign usage channels on contact records to see cross-company relationships.")
+            st.subheader("Recent conversations")
+            recent = list(
+                db.scalars(
+                    select(Interaction)
+                    .order_by(Interaction.occurred_on.desc(), Interaction.created_at.desc())
+                    .limit(4)
+                )
+            )
+            for interaction in recent:
+                with st.container(border=True):
+                    st.caption(f"{interaction.occurred_on} · {interaction.channel} · {interaction.kind}")
+                    st.write(interaction.summary)
+            if not recent:
+                st.caption("Log your first conversation from a contact record.")
+        st.divider()
         st.subheader("Relationships needing follow-through")
         active_contacts = {t.contact_id for t in all_tasks if t.status == "Open"}
         show_table(
@@ -207,14 +272,30 @@ def run(db):
         used = c.selectbox("Used by", [None, *CHANNELS], format_func=lambda x: x or "All")
         kind_values = sorted({*TYPES, *(c.relationship_type for c in all_contacts)})
         kind = d.selectbox("Relationship", [None, *kind_values], format_func=lambda x: x or "All")
-        filtered = contacts(db, search, captured, used, kind)
+        owners = sorted({c.owner for c in all_contacts})
+        owner_col, status_col = st.columns(2)
+        owner = owner_col.selectbox("Contact owner", [None, *owners], format_func=lambda x: x or "All")
+        status = status_col.selectbox(
+            "Contact status",
+            [None, *sorted({c.status for c in all_contacts})],
+            format_func=lambda x: x or "All",
+        )
+        filtered = contacts(db, search, captured, used, kind, owner)
+        if status:
+            filtered = [c for c in filtered if c.status == status]
+        st.caption(f"{len(filtered)} of {len(all_contacts)} contacts · filters do not restrict access")
         show_table([contact_row(c) for c in filtered])
         selected = choose("Open contact", options(filtered, lambda c: contact_labels[c.id]))
         with st.expander("Add contact", expanded=not all_contacts):
             contact_form(db)
         if selected:
             item = db.get(Contact, selected)
-            contact_form(db, item)
+            contact_profile(item, all_tasks, all_opps)
+            with st.expander("Edit contact details"):
+                contact_form(db, item)
+            if item.legacy_data:
+                with st.expander("Original imported record"):
+                    st.json(item.legacy_data)
             st.subheader("Conversation history")
             history = list(
                 db.scalars(
@@ -294,6 +375,8 @@ def run(db):
     elif page == "Opportunities":
         filter_channel = st.selectbox("Filter channel", [None, *CHANNELS], format_func=lambda x: x or "All")
         filtered = [o for o in all_opps if not filter_channel or o.channel == filter_channel]
+        with st.expander("Pipeline board", expanded=True):
+            pipeline(filtered)
         show_table(
             [
                 {
@@ -513,7 +596,10 @@ def run(db):
             task = reminder.task
             with st.container(border=True):
                 st.write(f"**{task.title}**")
-                st.write(f"{task_bucket(task)} · {task.due_date} · {task.owner} · {task.channel}")
+                chips([task_bucket(task), task.priority, task.channel])
+                st.caption(f"Due {task.due_date} · Owner: {task.owner}")
+                if task.contact:
+                    st.write(task.contact.name)
                 a, b = st.columns(2)
                 if a.button("Acknowledge for today", key=f"ack_{reminder.id}"):
                     reminder.acknowledged_at = utcnow()
