@@ -98,20 +98,31 @@ with contact_tab:
     search = a.text_input("Search contacts")
     capture = b.selectbox("Captured by", ["All", *CHANNELS])
     usage = c.selectbox("Used by", ["All", *CHANNELS])
+    a, b, c = st.columns(3)
+    relationship = a.selectbox("Filter relationship type", ["All", *sorted({v["kind"] for v in contacts})])
+    sort_by = b.selectbox("Sort contacts by", ["Name", "Organization", "Relationship type"])
+    direction = c.selectbox("Sort order", ["A–Z", "Z–A"])
     visible = [
         v
         for v in contacts
         if search.casefold() in (v["name"] + " " + v["organization"] + " " + v["email"]).casefold()
         and (capture == "All" or v["captured_by"] == capture)
         and (usage == "All" or usage in v["used_by"])
+        and (relationship == "All" or v["kind"] == relationship)
     ]
+    sort_field = {"Name": "name", "Organization": "organization", "Relationship type": "kind"}[sort_by]
+    visible.sort(
+        key=lambda v: (v[sort_field].casefold(), v["name"].casefold(), v["organization"].casefold()),
+        reverse=direction == "Z–A",
+    )
+    st.caption(f"Showing {len(visible)} of {len(contacts)} contacts")
     show(
         [
             {
                 "Name": v["name"],
                 "Organization": v["organization"],
                 "Email": v["email"],
-                "Type": v["kind"],
+                "Relationship type": v["kind"],
                 "Captured by": v["captured_by"],
                 "Used by": ", ".join(v["used_by"]),
                 "Owner": v["owner"],
