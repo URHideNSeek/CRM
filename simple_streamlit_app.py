@@ -1,6 +1,8 @@
 """Single-file CRM prototype: Streamlit + standard library, no external services."""
 
 import json
+import hashlib
+import hmac
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -8,6 +10,36 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 st.set_page_config(page_title="Unseen Robotics CRM", page_icon="🧭", layout="wide")
+# Authenticate before initializing or rendering any CRM records.
+try:
+    app_password = st.secrets["APP_PASSWORD"]
+except (KeyError, FileNotFoundError):
+    app_password = ""
+if not isinstance(app_password, str) or len(app_password) < 16:
+    st.error("Configure APP_PASSWORD in app secrets with at least 16 characters.")
+    st.stop()
+password_version = hashlib.sha256(app_password.encode()).hexdigest()
+if st.session_state.get("authenticated_password_version") != password_version:
+    # Discard records if the configured password changes during a session.
+    for key in ("contacts", "interactions", "tasks", "source_metadata", "authenticated_password_version"):
+        st.session_state.pop(key, None)
+    st.title("Unseen Robotics CRM")
+    with st.form("sign_in"):
+        st.text_input("Password", type="password", key="login_password")
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        entered = st.session_state.pop("login_password", "")
+        if hmac.compare_digest(entered.encode(), app_password.encode()):
+            st.session_state.authenticated_password_version = password_version
+            st.rerun()
+        st.error("Incorrect password.")
+    st.stop()
+if st.sidebar.button("Sign out"):
+    for key in list(st.session_state):
+        del st.session_state[key]
+    st.rerun()
+st.sidebar.caption("Download a backup before signing out.")
+
 CHANNELS = [
     "UR Partners",
     "UR Private BD",

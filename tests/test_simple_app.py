@@ -4,7 +4,11 @@ from streamlit.testing.v1 import AppTest
 
 
 def test_simple_contact_conversation_and_followup():
-    app = AppTest.from_file(str(Path(__file__).parents[1] / "simple_streamlit_app.py")).run()
+    app = AppTest.from_file(str(Path(__file__).parents[1] / "simple_streamlit_app.py"))
+    app.secrets["APP_PASSWORD"] = "test-password-long-enough"
+    app.run()
+    app.text_input[0].set_value("test-password-long-enough")
+    app.button[0].click().run()
     assert not app.exception
     next(v for v in app.text_input if v.label == "Name").set_value("Example Contact")
     next(v for v in app.text_input if v.label == "Organization").set_value("Example Company")
@@ -28,3 +32,26 @@ def test_simple_contact_conversation_and_followup():
     assert app.session_state["tasks"][0]["status"] == "Completed"
     next(v for v in app.selectbox if v.label == "Used by").set_value("UR Private BD").run()
     assert not app.exception
+
+
+def test_password_gate_and_signout():
+    app = AppTest.from_file(str(Path(__file__).parents[1] / "simple_streamlit_app.py"))
+    app.run()
+    assert not app.exception
+    assert app.error
+    assert not app.tabs
+    app.secrets["APP_PASSWORD"] = "test-password-long-enough"
+    app.run()
+    app.text_input[0].set_value("incorrect")
+    app.button[0].click().run()
+    assert app.error
+    assert not app.tabs
+    app.text_input[0].set_value("test-password-long-enough")
+    app.button[0].click().run()
+    assert not app.exception
+    assert app.tabs
+    app.session_state["contacts"] = [{"private": "data"}]
+    next(b for b in app.button if b.label == "Sign out").click().run()
+    assert not app.exception
+    assert not app.tabs
+    assert "contacts" not in app.session_state
