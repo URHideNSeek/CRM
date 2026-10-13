@@ -128,7 +128,7 @@ contact_tab, conversation_tab, followup_tab, backup_tab = st.tabs(
 )
 
 with contact_tab:
-    from st_aggrid import AgGrid
+    from st_aggrid import AgGrid, JsCode
     import pandas as pd
 
     # Imported organization records have no named individual.
@@ -146,12 +146,15 @@ with contact_tab:
                 for field in ["Name", "Organization", "Relationship type"]
             ] + [{"field": "id", "hide": True}],
             "defaultColDef": {"sortable": True, "resizable": True, "flex": 1},
-            "rowSelection": {"mode": "singleRow", "enableClickSelection": True,
+            "onRowDoubleClicked": JsCode("function(event) { event.node.setSelected(true, true); }"),
+            "rowSelection": {"mode": "singleRow", "enableClickSelection": False,
                              "checkboxes": False},
         },
-        update_on=["selectionChanged"], key="contact_grid", height=350,
+        update_on=["selectionChanged", "rowDoubleClicked"], key="contact_grid", height=350,
+        allow_unsafe_jscode=True,
         enable_enterprise_modules=False,
     )
+    st.caption("Double-click a contact row to read its details below.")
     selected = grid.selected_rows
     chosen = selected.iloc[0]["id"] if selected is not None and len(selected) else None
     if st.button("Add new contact", key="new_contact"):
