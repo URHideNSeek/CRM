@@ -30,8 +30,6 @@ def test_simple_contact_conversation_and_followup():
     next(b for b in app.button if b.label == "Complete").click().run()
     assert not app.exception
     assert app.session_state["tasks"][0]["status"] == "Completed"
-    next(v for v in app.selectbox if v.label == "Used by").set_value("UR Private BD").run()
-    assert not app.exception
 
 
 def test_password_gate_and_signout():

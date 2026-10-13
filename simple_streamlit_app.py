@@ -94,49 +94,42 @@ contact_tab, conversation_tab, followup_tab, backup_tab = st.tabs(
 )
 
 with contact_tab:
-    a, b, c = st.columns(3)
-    search = a.text_input("Search contacts")
-    capture = b.selectbox("Captured by", ["All", *CHANNELS])
-    usage = c.selectbox("Used by", ["All", *CHANNELS])
-    a, b, c = st.columns(3)
-    relationship = a.selectbox("Filter relationship type", ["All", *sorted({v["kind"] for v in contacts})])
-    sort_by = b.selectbox("Sort contacts by", ["Name", "Organization", "Relationship type"])
-    direction = c.selectbox("Sort order", ["A–Z", "Z–A"])
-    visible = [
-        v
-        for v in contacts
-        if search.casefold() in (v["name"] + " " + v["organization"] + " " + v["email"]).casefold()
-        and (capture == "All" or v["captured_by"] == capture)
-        and (usage == "All" or usage in v["used_by"])
-        and (relationship == "All" or v["kind"] == relationship)
-    ]
-    sort_field = {"Name": "name", "Organization": "organization", "Relationship type": "kind"}[sort_by]
-    visible.sort(
-        key=lambda v: (v[sort_field].casefold(), v["name"].casefold(), v["organization"].casefold()),
-        reverse=direction == "Z–A",
+    from st_aggrid import AgGrid
+    import pandas as pd
+
+    # Imported organization records have no named individual.
+    for contact in contacts:
+        if contact.get("record_type") == "organization":
+            contact["name"] = ""
+    rows = [{"Name": v["name"], "Organization": v["organization"],
+             "Relationship type": v["kind"], "id": v["id"]} for v in contacts]
+    grid = AgGrid(
+        pd.DataFrame(rows, columns=["Name", "Organization", "Relationship type", "id"]),
+        gridOptions={
+            "columnDefs": [
+                {"field": field, "filter": "agTextColumnFilter", "floatingFilter": True,
+                 "filterParams": {"debounceMs": 100}}
+                for field in ["Name", "Organization", "Relationship type"]
+            ] + [{"field": "id", "hide": True}],
+            "defaultColDef": {"sortable": True, "resizable": True, "flex": 1},
+            "rowSelection": {"mode": "singleRow", "enableClickSelection": True,
+                             "checkboxes": False},
+        },
+        update_on=["selectionChanged"], key="contact_grid", height=350,
+        enable_enterprise_modules=False,
     )
-    st.caption(f"Showing {len(visible)} of {len(contacts)} contacts")
-    show(
-        [
-            {
-                "Name": v["name"],
-                "Organization": v["organization"],
-                "Relationship type": v["kind"],
-                "Captured by": v["captured_by"],
-                "Used by": ", ".join(v["used_by"]),
-                "Owner": v["owner"],
-                "Notes": v["notes"],
-            }
-            for v in visible
-        ]
-    )
-    mapping = labels()
-    chosen = st.selectbox(
-        "Edit contact (None to add)",
-        [None, *mapping],
-        format_func=lambda x: mapping.get(x, "Add new contact"),
-    )
+    selected = grid.selected_rows
+    chosen = selected.iloc[0]["id"] if selected is not None and len(selected) else None
+    if st.button("Add new contact", key="new_contact"):
+        chosen = None
     existing = next((v for v in contacts if v["id"] == chosen), {})
+    st.subheader("Contact details" if existing else "Add a contact")
+    if existing:
+        st.write(existing.get("notes") or "No relationship notes recorded.")
+        history = sorted([v for v in interactions if v["contact_id"] == chosen],
+                         key=lambda v: v["date"], reverse=True)
+        for entry in history[:3]:
+            st.write(f"**{entry['date']}** · {entry['summary']}")
     with st.form(f"contact_{chosen}"):
         a, b = st.columns(2)
         name = a.text_input("Name", existing.get("name", ""))
@@ -163,12 +156,13 @@ with contact_tab:
                 )
                 for v in contacts
             )
-            if not name.strip() or not owner.strip():
-                st.error("Name and owner are required.")
+            if not (name.strip() or organization.strip()) or not owner.strip():
+                st.error("Enter a name or organization, and an owner.")
             elif duplicate:
                 st.error("A matching contact exists. Select it above to edit.")
             else:
                 record = {
+                    **existing,
                     "id": chosen or str(uuid4()),
                     "name": name.strip(),
                     "organization": organization.strip(),
@@ -260,6 +254,17 @@ with followup_tab:
                 f"{mapping.get(task['contact_id'], 'General task')} · {task['owner']} · {task['channel']}"
             )
             st.write(f"{bucket(task)} · Due {task['due'] or 'not set'} · {task['priority']} priority")
+            contact = next((v for v in contacts if v["id"] == task["contact_id"]), {})
+            history = sorted([v for v in interactions if task["contact_id"] and v["contact_id"] == task["contact_id"]],
+                             key=lambda v: v["date"], reverse=True)
+            last = history[0] if history else None
+            st.write("**Who:** " + (" · ".join(filter(None, [contact.get("name"), contact.get("organization")])) or task.get("target") or "General task"))
+            st.write("**Why / relationship context:** " + (task.get("reason") or contact.get("notes") or "No reason recorded; confirm the purpose before reaching out."))
+            st.write("**Last contact:** " + (f"{last['date']} — {last['summary']}" if last else "No dated interaction recorded."))
+            st.write("**Recommended next step:** " + (task.get("recommendation") or task["action"]))
+            method = task.get("method") or ("Email" if contact.get("email") else "Confirm the preferred contact method")
+            st.write("**How:** " + method)
+            st.caption("Suggested approach: reference the last conversation, state the next action, and ask one clear question. Suggestions are based on recorded context; they are not confirmed commitments.")
             if task.get("original_status"):
                 st.caption("Recorded status: " + task["original_status"])
             if task["status"] == "Open":
@@ -274,6 +279,9 @@ with followup_tab:
         st.info("No follow-ups in this view.")
     with st.expander("Add follow-up"), st.form("followup"):
         action = st.text_input("Action")
+        reason = st.text_area("Why follow up / context")
+        recommendation = st.text_area("Recommended next step")
+        method = st.selectbox("Follow-up method", ["Email", "Phone", "Meeting", "LinkedIn", "Other"])
         target = st.selectbox(
             "Related contact", [None, *mapping], format_func=lambda x: mapping.get(x, "General task")
         )
@@ -292,6 +300,9 @@ with followup_tab:
                         "owner": owner,
                         "channel": channel,
                         "action": action,
+                        "reason": reason,
+                        "recommendation": recommendation,
+                        "method": method,
                         "due": due.isoformat(),
                         "priority": priority,
                         "status": "Open",
