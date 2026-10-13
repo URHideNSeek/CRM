@@ -38,7 +38,7 @@ if st.sidebar.button("Sign out"):
     for key in list(st.session_state):
         del st.session_state[key]
     st.rerun()
-st.sidebar.caption("Download a backup before signing out.")
+st.sidebar.caption("CRM access")
 
 CHANNELS = [
     "UR Partners",
@@ -52,6 +52,37 @@ CHANNELS = [
     "UR IT",
     "Other",
 ]
+from crm.simple_store import load, save, ConflictError
+try:
+    database_url = st.secrets.get("DATABASE_URL", "")
+except FileNotFoundError:
+    database_url = ""
+if database_url:
+    try:
+        db_version, db_payload = load(database_url)
+        for collection in ["contacts", "interactions", "tasks"]:
+            st.session_state[collection] = db_payload.get(collection, [])
+        st.session_state["crm_source_metadata"] = db_payload.get("source_metadata", {})
+    except Exception:
+        st.error("Unable to connect to the CRM database. Check the database configuration.")
+        st.stop()
+
+
+def persist_and_rerun():
+    if database_url:
+        try:
+            save(database_url, db_version, {
+                **{key: st.session_state[key] for key in ["contacts", "interactions", "tasks"]},
+                "source_metadata": st.session_state.get("crm_source_metadata", {}),
+            })
+        except ConflictError:
+            st.error("Someone updated the CRM first. Reload and apply your change again.")
+            st.stop()
+        except Exception:
+            st.error("Could not save to the database. Your change has not been saved.")
+            st.stop()
+    st.rerun()
+
 for collection in ["contacts", "interactions", "tasks"]:
     st.session_state.setdefault(collection, [])
 contacts = st.session_state.contacts
@@ -82,9 +113,12 @@ def show(rows):
 
 st.title("Unseen Robotics CRM")
 st.caption("Contacts · Conversations · Next actions")
-st.warning(
-    "Prototype: records last only for this session. Download a backup before closing or reloading; restore it with Import."
-)
+if database_url:
+    st.caption("Connected to PostgreSQL • changes save automatically")
+    if st.button("Refresh CRM data"):
+        st.rerun()
+else:
+    st.warning("Session-only mode: configure DATABASE_URL for permanent storage. Download a backup before closing.")
 a, b, c = st.columns(3)
 a.metric("Contacts", len(contacts))
 b.metric("Overdue", sum(bucket(t) == "Overdue" for t in tasks))
@@ -177,7 +211,7 @@ with contact_tab:
                     contacts[contacts.index(existing)] = record
                 else:
                     contacts.append(record)
-                st.rerun()
+                persist_and_rerun()
 
 with conversation_tab:
     mapping = labels()
@@ -232,7 +266,7 @@ with conversation_tab:
                                 "status": "Open",
                             }
                         )
-                    st.rerun()
+                    persist_and_rerun()
 
 with followup_tab:
     mapping = labels()
@@ -271,10 +305,10 @@ with followup_tab:
                 a, b = st.columns(2)
                 if a.button("Complete", key="done_" + task["id"]):
                     task["status"] = "Completed"
-                    st.rerun()
+                    persist_and_rerun()
                 if b.button("Snooze 3 days", key="snooze_" + task["id"]):
                     task["due"] = (now + timedelta(days=3)).isoformat()
-                    st.rerun()
+                    persist_and_rerun()
     if not visible:
         st.info("No follow-ups in this view.")
     with st.expander("Add follow-up"), st.form("followup"):
@@ -308,7 +342,7 @@ with followup_tab:
                         "status": "Open",
                     }
                 )
-                st.rerun()
+                persist_and_rerun()
 
 
 def prepare_history(history):
@@ -443,7 +477,7 @@ with backup_tab:
             for collection in required_fields:
                 st.session_state[collection] = incoming[collection]
             st.session_state["crm_source_metadata"] = incoming.get("source_metadata", {})
-            st.rerun()
+            persist_and_rerun()
         except (ValueError, TypeError, KeyError, AttributeError):
             st.error("Invalid backup. Import a JSON backup downloaded from this app.")
     st.caption(
@@ -484,7 +518,7 @@ with backup_tab:
                 k: v for k, v in history.items() if k not in ["contacts", "conversations", "followups"]
             }
             st.session_state["history_imported"] = True
-            st.rerun()
+            persist_and_rerun()
         except (ValueError, TypeError, KeyError, AttributeError):
             st.error("Invalid history file. Use the supplied UR CRM chat-history JSON.")
     if st.session_state.get("history_imported"):

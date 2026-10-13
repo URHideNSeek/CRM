@@ -21,3 +21,5 @@ This is a session-only prototype: download a backup before signing out or closin
 the session. Restore backups or upload the UR chat import in Backup & restore.
 It does not automatically ingest chats or write to the shared company CRM.
 Persistent PostgreSQL storage and chat synchronization require the full app/backend.
+
+For Neon persistence and ChatGPT read/write access, see neon-chatgpt.md.
