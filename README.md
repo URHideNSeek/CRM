@@ -132,3 +132,10 @@ The app, reminder worker and API share the PostgreSQL database. The daily remind
 ## Streamlit workspace design
 
 The frontend includes a follow-up-first dashboard with attention/upcoming/undated queues, inline complete/snooze actions, owner focus, channel usage charts and recent conversations. Contact profiles surface capture/usage channels, context, linked opportunities and open-action counts. Contact lists filter by relationship, captured channel, usage channel, owner and status. The pipeline board groups opportunities into Explore, Engage, Advance and Outcomes alongside the detailed table. Native Streamlit controls provide keyboard interaction, and the layout adapts to smaller screens.
+
+
+## Simple single-file prototype
+
+For a quick frontend without a database or external dependencies, paste the complete contents of `simple_streamlit_app.py` into a fresh Snowflake `streamlit_app.py` with the generated Streamlit package settings, or run `streamlit run simple_streamlit_app.py` locally. It uses Streamlit and the Python standard library only.
+
+It includes contacts, capture/usage-channel filtering, conversation history and owned follow-ups with complete/snooze actions. Data is temporary per-session: download a JSON backup before closing/reloading and restore it later. It has no PostgreSQL connection, cross-user shared storage or background notification service. The full database-backed CRM remains available in `app.py`.
