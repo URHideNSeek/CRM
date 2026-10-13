@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.streamlit/secrets.toml
+*.db
+backups/
+data/
+import-review.json
