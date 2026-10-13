@@ -121,7 +121,6 @@ with contact_tab:
             {
                 "Name": v["name"],
                 "Organization": v["organization"],
-                "Email": v["email"],
                 "Relationship type": v["kind"],
                 "Captured by": v["captured_by"],
                 "Used by": ", ".join(v["used_by"]),
