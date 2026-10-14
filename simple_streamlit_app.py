@@ -9,6 +9,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+from crm.nda import STATUSES as NDA_STATUSES, indicator as nda_indicator
 from crm.digital_twin import ensure_twins, build_twin, change_triggers, public_url
 
 st.set_page_config(page_title="UR Contacts", page_icon="🧭", layout="wide")
@@ -144,14 +145,14 @@ if contact_tab is not None:
             if contact.get("record_type") == "organization":
                 contact["name"] = ""
         rows = [{"Name": v["name"], "Organization": v["organization"],
-                 "Relationship type": v["kind"], "id": v["id"]} for v in contacts]
+                 "Relationship type": v["kind"], "NDA": nda_indicator(v, now), "id": v["id"]} for v in contacts]
         grid = AgGrid(
-            pd.DataFrame(rows, columns=["Name", "Organization", "Relationship type", "id"]),
+            pd.DataFrame(rows, columns=["Name", "Organization", "Relationship type", "NDA", "id"]),
             gridOptions={
                 "columnDefs": [
                     {"field": field, "filter": "agTextColumnFilter", "floatingFilter": True,
                      "filterParams": {"debounceMs": 100}}
-                    for field in ["Name", "Organization", "Relationship type"]
+                    for field in ["Name", "Organization", "Relationship type", "NDA"]
                 ] + [{"field": "id", "hide": True}],
                 "defaultColDef": {"sortable": True, "resizable": True, "flex": 1},
                 "onRowDoubleClicked": JsCode("function(event) { event.node.setSelected(true, true); }"),
@@ -174,6 +175,7 @@ if contact_tab is not None:
         existing = next((v for v in contacts if v["id"] == chosen), {})
         st.subheader("Contact details" if existing else "Add a contact")
         if existing:
+            st.info("NDA: " + nda_indicator(existing, now))
             st.write(existing.get("latest_business_summary") or existing.get("background_summary") or "No relationship summary recorded.")
             with st.expander("Full notes and source history"):
                 st.write(existing.get("notes") or "No relationship notes recorded.")
@@ -195,6 +197,25 @@ if contact_tab is not None:
             )
             used = st.multiselect("Used by channels", contact_channels, default=existing.get("used_by", []))
             notes = st.text_area("Context / interests / introductions", existing.get("notes", ""))
+            nda_record = dict(existing.get("nda", {}))
+            if existing.get("record_type") != "organization":
+                with st.expander("NDA coverage"):
+                    nda_status = st.selectbox("NDA status", NDA_STATUSES, index=NDA_STATUSES.index(nda_record.get("status", "Unknown")) if nda_record.get("status", "Unknown") in NDA_STATUSES else 0)
+                    nda_party = st.text_input("Agreement party / company", nda_record.get("agreement_party", ""))
+                    nda_reference = st.text_input("Signed agreement or evidence reference", nda_record.get("evidence_reference", ""), help="Document ID, secure location or source message ID. Keep agreement terms and full documents outside the common CRM.")
+                    a, b = st.columns(2)
+                    nda_signed = a.checkbox("Both parties signed", value=nda_record.get("both_parties_signed", False))
+                    nda_coverage = b.checkbox("This person / relationship is covered", value=nda_record.get("coverage_confirmed", False))
+                    nda_effective = a.text_input("NDA effective date (YYYY-MM-DD, optional)", nda_record.get("effective_date", ""))
+                    nda_expiration = b.text_input("NDA expiration date (YYYY-MM-DD, optional)", nda_record.get("expiration_date", ""))
+                    nda_record.update(status=nda_status, agreement_party=nda_party.strip(), evidence_reference=nda_reference.strip(), both_parties_signed=nda_signed, coverage_confirmed=nda_coverage, effective_date=nda_effective.strip(), expiration_date=nda_expiration.strip())
+            nda_valid = True
+            try:
+                for field in ("effective_date", "expiration_date"):
+                    if nda_record.get(field): date.fromisoformat(nda_record[field])
+                if nda_record.get("effective_date") and nda_record.get("expiration_date") and nda_record["effective_date"] > nda_record["expiration_date"]: nda_valid = False
+                if nda_record.get("status") == "Executed" and not (nda_record.get("both_parties_signed") and nda_record.get("coverage_confirmed") and nda_record.get("evidence_reference") and nda_record.get("agreement_party")): nda_valid = False
+            except (ValueError, TypeError): nda_valid = False
             if st.form_submit_button("Save contact"):
                 normalized_email = email.strip().lower()
                 duplicate = any(
@@ -208,7 +229,9 @@ if contact_tab is not None:
                     )
                     for v in contacts
                 )
-                if not (name.strip() or organization.strip()) or not owner.strip():
+                if not nda_valid:
+                    st.error("Check NDA dates. Executed status requires both signatures, confirmed coverage, the agreement party, and an evidence reference.")
+                elif not (name.strip() or organization.strip()) or not owner.strip():
                     st.error("Enter a name or organization, and an owner.")
                 elif duplicate:
                     st.error("A matching contact exists. Select it above to edit.")
@@ -225,6 +248,8 @@ if contact_tab is not None:
                         "used_by": used,
                         "notes": notes,
                     }
+                    if record.get("record_type") != "organization":
+                        record["nda"] = {**nda_record, "reviewed_on": now.isoformat(), "source": "Operator-confirmed NDA coverage"}
                     if chosen:
                         contacts[contacts.index(existing)] = record
                     else:
@@ -321,17 +346,18 @@ if followup_tab is not None:
                 "Company": by_id.get(t.get("contact_id"), {}).get("organization", ""),
                 "When": t.get("due") or "Needs a date",
                 "Status": bucket(t),
+                "NDA": nda_indicator(by_id.get(t.get("contact_id"), {}), now),
                 "What to follow up about": t.get("short_summary") or t["action"],
                 "Priority": t.get("priority", "Medium"),
             } for t in visible], hide_index=True, use_container_width=True, height=350,
-                column_config={"Who": st.column_config.TextColumn(width="small"), "Company": st.column_config.TextColumn(width="small"), "When": st.column_config.TextColumn(width="small"), "Status": st.column_config.TextColumn(width="small"), "What to follow up about": st.column_config.TextColumn(width="large"), "Priority": None})
+                column_config={"Who": st.column_config.TextColumn(width="small"), "Company": st.column_config.TextColumn(width="small"), "When": st.column_config.TextColumn(width="small"), "Status": st.column_config.TextColumn(width="small"), "What to follow up about": st.column_config.TextColumn(width="large"), "Priority": None, "NDA": st.column_config.TextColumn(width="small")})
             selected_task = st.selectbox("Task to review", [t["id"] for t in visible], format_func=lambda tid: next((f"{mapping.get(t.get('contact_id'), 'General task')} · {t['action'][:90]}" for t in visible if t["id"] == tid), tid), key="selected_followup")
             task = next(t for t in visible if t["id"] == selected_task)
             contact = by_id.get(task.get("contact_id"), {})
             twin = contact.get("professional_twin", {})
             with st.container(border=True):
                 st.write("**Full next action:** " + task["action"])
-                st.caption(f"Owner: {task['owner']} · Channel: {task['channel']}")
+                st.caption(f"Owner: {task['owner']} · Channel: {task['channel']} · NDA: {nda_indicator(contact, now)}")
                 st.write(f"{bucket(task)} · Due {task['due'] or 'not set'} · {task['priority']} priority")
                 history = sorted([v for v in interactions if task["contact_id"] and v["contact_id"] == task["contact_id"]],
                                  key=lambda v: v["date"], reverse=True)
