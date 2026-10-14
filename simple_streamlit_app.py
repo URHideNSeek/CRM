@@ -341,6 +341,13 @@ if followup_tab is not None:
         visible.sort(key=lambda t: (t.get("due") or "9999-12-31", {"High": 0, "Medium": 1, "Low": 2}.get(t.get("priority"), 1)))
         st.caption(f"{len(visible)} matching follow-ups · select a task below to act")
         if visible:
+            visible_ids = [t["id"] for t in visible]
+            advance = st.session_state.pop("followup_advance", None)
+            if advance:
+                candidates = advance.get("remaining", [])
+                st.session_state["selected_followup"] = next((tid for tid in candidates if tid in visible_ids), visible_ids[0])
+            elif st.session_state.get("selected_followup") not in visible_ids:
+                st.session_state["selected_followup"] = visible_ids[0]
             st.dataframe([{
                 "Who": by_id.get(t.get("contact_id"), {}).get("name") or by_id.get(t.get("contact_id"), {}).get("organization") or "General task",
                 "Company": by_id.get(t.get("contact_id"), {}).get("organization", ""),
@@ -378,18 +385,50 @@ if followup_tab is not None:
                 if task.get("original_status"):
                     st.caption("Recorded status: " + task["original_status"])
                 if task["status"] == "Open":
+                    position = visible_ids.index(task["id"])
+                    remaining = visible_ids[position + 1:] + visible_ids[:position]
+                    st.caption(f"Follow-up {position + 1} of {len(visible)} · Save an outcome to move to the next item.")
+                    if contact.get("email"):
+                        st.write("**Email:** " + contact["email"])
+                    with st.form("work_followup_" + task["id"]):
+                        outcome = st.text_area("What happened?", placeholder="Record the message you sent, call outcome, or completed action. Drafts stay open.")
+                        method_used = st.selectbox("Method used", ["Email", "Phone", "Meeting", "LinkedIn", "Other"])
+                        occurred = st.date_input("Activity date", now)
+                        next_step = st.text_input("Next action (optional)", placeholder="For example: check for a reply")
+                        next_due = st.date_input("Next action due", now + timedelta(days=7))
+                        finish = st.form_submit_button("Save follow-up & next", type="primary")
+                        if finish:
+                            if not outcome.strip():
+                                st.error("Record what actually happened before completing this follow-up.")
+                            elif occurred > now:
+                                st.error("A completed activity cannot be dated in the future.")
+                            else:
+                                interactions.append({"id": str(uuid4()), "contact_id": task.get("contact_id"), "channel": task["channel"], "date": occurred.isoformat(), "summary": outcome.strip(), "next_action": next_step.strip(), "method": method_used, "source": "Operator-recorded follow-up", "task_id": task["id"]})
+                                task.update(status="Completed", completed_on=occurred.isoformat(), completion_summary=outcome.strip())
+                                if next_step.strip() and not any(t.get("status") == "Open" and t.get("contact_id") == task.get("contact_id") and t.get("action", "").strip().casefold() == next_step.strip().casefold() for t in tasks):
+                                    tasks.append({"id": str(uuid4()), "contact_id": task.get("contact_id"), "channel": task["channel"], "owner": task["owner"], "action": next_step.strip(), "due": next_due.isoformat(), "priority": "Medium", "status": "Open", "source_task_id": task["id"]})
+                                st.session_state["followup_advance"] = {"remaining": remaining}
+                                persist_and_rerun()
                     a, b = st.columns(2)
-                    if a.button("Mark complete", type="primary", key="done_" + task["id"]):
-                        task["status"] = "Completed"
-                        persist_and_rerun()
-                    if b.button("Snooze 3 days", key="snooze_" + task["id"]):
+                    if a.button("Skip for now & next", key="skip_" + task["id"], disabled=not remaining):
+                        st.session_state["followup_advance"] = {"remaining": remaining}
+                        st.rerun()
+                    if b.button("Snooze 3 days & next", key="snooze_" + task["id"]):
                         task["due"] = (now + timedelta(days=3)).isoformat()
+                        st.session_state["followup_advance"] = {"remaining": remaining}
                         persist_and_rerun()
-                    with st.form("reschedule_" + task["id"]):
-                        updated_due = st.date_input("Set follow-up date", date.fromisoformat(task["due"]) if task.get("due") else now)
-                        if st.form_submit_button("Save date"):
-                            task["due"] = updated_due.isoformat()
+                    with st.expander("Complete without logging outreach / change date"):
+                        st.caption("Use this for an administrative task already completed. No communication is recorded.")
+                        if st.button("Complete task & next", key="done_" + task["id"]):
+                            task.update(status="Completed", completed_on=now.isoformat())
+                            st.session_state["followup_advance"] = {"remaining": remaining}
                             persist_and_rerun()
+                        with st.form("reschedule_" + task["id"]):
+                            updated_due = st.date_input("Set follow-up date", date.fromisoformat(task["due"]) if task.get("due") else now)
+                            if st.form_submit_button("Save date & next"):
+                                task["due"] = updated_due.isoformat()
+                                st.session_state["followup_advance"] = {"remaining": remaining}
+                                persist_and_rerun()
         if not visible:
             st.info("No follow-ups match these filters. Choose All open or clear your search to see other tasks.")
         st.subheader("Communication triggers from verified changes")
@@ -683,3 +722,4 @@ if backup_tab is not None:
                 for key in ["opportunities", "events", "organizations", "suppliers", "review"]:
                     st.subheader(key.capitalize())
                     st.json(metadata.get(key, []), expanded=False)
+
