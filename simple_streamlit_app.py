@@ -165,6 +165,9 @@ if contact_tab is not None:
         st.caption("Click a contact row to open its details, or choose it below.")
         selected = grid.selected_rows
         chosen = selected.iloc[0]["id"] if selected is not None and len(selected) else None
+        if chosen and chosen != st.session_state.get("last_grid_contact"):
+            st.session_state["contact_picker"] = chosen
+            st.session_state["last_grid_contact"] = chosen
         chosen = st.selectbox("Open contact", [None, *labels()], index=([None, *labels()].index(chosen) if chosen else 0), format_func=lambda cid: labels().get(cid, "Add a new contact"), key="contact_picker")
         if st.button("Add new contact", key="new_contact", on_click=lambda: st.session_state.update(contact_picker=None)):
             chosen = None
