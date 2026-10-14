@@ -12,6 +12,7 @@ import streamlit as st
 from crm.digital_twin import ensure_twins, build_twin, change_triggers, public_url
 
 st.set_page_config(page_title="Unseen Robotics CRM", page_icon="🧭", layout="wide")
+st.markdown("<style>.block-container{padding-top:2rem;padding-bottom:2rem} [data-testid=stMetricValue]{font-size:1.8rem}</style>", unsafe_allow_html=True)
 # Authenticate before initializing or rendering any CRM records.
 try:
     app_password = st.secrets["APP_PASSWORD"]
@@ -116,7 +117,7 @@ def show(rows):
         st.info("No matching records yet.")
 
 
-st.title("Unseen Robotics CRM")
+st.markdown("## Unseen Robotics CRM")
 st.caption("Your relationships and next actions")
 if st.session_state.get("save_notice"):
     st.success(st.session_state.pop("save_notice"))
@@ -314,7 +315,8 @@ if followup_tab is not None:
                 "Status": bucket(t),
                 "What to follow up about": t.get("short_summary") or t["action"],
                 "Priority": t.get("priority", "Medium"),
-            } for t in visible], hide_index=True, use_container_width=True, height=350)
+            } for t in visible], hide_index=True, use_container_width=True, height=350,
+                column_config={"Who": st.column_config.TextColumn(width="small"), "Company": st.column_config.TextColumn(width="small"), "When": st.column_config.TextColumn(width="small"), "Status": st.column_config.TextColumn(width="small"), "What to follow up about": st.column_config.TextColumn(width="large"), "Priority": None})
             selected_task = st.selectbox("Task to review", [t["id"] for t in visible], format_func=lambda tid: next((f"{mapping.get(t.get('contact_id'), 'General task')} · {t['action'][:90]}" for t in visible if t["id"] == tid), tid), key="selected_followup")
             task = next(t for t in visible if t["id"] == selected_task)
             contact = by_id.get(task.get("contact_id"), {})
