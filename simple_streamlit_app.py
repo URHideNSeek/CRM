@@ -233,6 +233,11 @@ if contact_tab is not None:
 if conversation_tab is not None:
     with conversation_tab:
         mapping = labels()
+        st.subheader("Conversations")
+        history_query = st.text_input("Search conversations", placeholder="Person, company or conversation content").strip().casefold()
+        history_rows = sorted(interactions, key=lambda item: item.get("date", ""), reverse=True)
+        history_rows = [item for item in history_rows if not history_query or history_query in " ".join([mapping.get(item.get("contact_id"), ""), item.get("summary", ""), item.get("next_action", "")]).casefold()]
+        st.caption(f"{len(history_rows)} conversations · newest first")
         show(
             [
                 {
@@ -242,7 +247,7 @@ if conversation_tab is not None:
                     "Summary": v["summary"],
                     "Next action": v["next_action"],
                 }
-                for v in reversed(interactions)
+                for v in history_rows
             ]
         )
         if not contacts:
