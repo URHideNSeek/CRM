@@ -339,25 +339,49 @@ if followup_tab is not None:
         by_id = {c["id"]: c for c in contacts}
         visible = [t for t in visible if not query or query in " ".join([t.get("action", ""), mapping.get(t.get("contact_id"), ""), t.get("owner", "")]).casefold()]
         visible.sort(key=lambda t: (t.get("due") or "9999-12-31", {"High": 0, "Medium": 1, "Low": 2}.get(t.get("priority"), 1)))
-        st.caption(f"{len(visible)} matching follow-ups · select a task below to act")
+        st.caption(f"{len(visible)} matching follow-ups · double-click a row to open its details")
         if visible:
             visible_ids = [t["id"] for t in visible]
             advance = st.session_state.pop("followup_advance", None)
             if advance:
+                st.session_state["followup_grid_epoch"] = st.session_state.get("followup_grid_epoch", 0) + 1
+                st.session_state.pop("last_grid_followup", None)
                 candidates = advance.get("remaining", [])
                 st.session_state["selected_followup"] = next((tid for tid in candidates if tid in visible_ids), visible_ids[0])
             elif st.session_state.get("selected_followup") not in visible_ids:
                 st.session_state["selected_followup"] = visible_ids[0]
-            st.dataframe([{
+            from st_aggrid import AgGrid, JsCode
+            import pandas as pd
+            followup_rows = [{
                 "Who": by_id.get(t.get("contact_id"), {}).get("name") or by_id.get(t.get("contact_id"), {}).get("organization") or "General task",
                 "Company": by_id.get(t.get("contact_id"), {}).get("organization", ""),
                 "When": t.get("due") or "Needs a date",
                 "Status": bucket(t),
                 "NDA": nda_indicator(by_id.get(t.get("contact_id"), {}), now),
                 "What to follow up about": t.get("short_summary") or t["action"],
-                "Priority": t.get("priority", "Medium"),
-            } for t in visible], hide_index=True, use_container_width=True, height=350,
-                column_config={"Who": st.column_config.TextColumn(width="small"), "Company": st.column_config.TextColumn(width="small"), "When": st.column_config.TextColumn(width="small"), "Status": st.column_config.TextColumn(width="small"), "What to follow up about": st.column_config.TextColumn(width="large"), "Priority": None, "NDA": st.column_config.TextColumn(width="small")})
+                "id": t["id"],
+            } for t in visible]
+            followup_grid = AgGrid(
+                pd.DataFrame(followup_rows),
+                gridOptions={
+                    "columnDefs": [
+                        {"field": field, "flex": 3 if field == "What to follow up about" else 1, "minWidth": 110}
+                        for field in ["Who", "Company", "When", "Status", "NDA", "What to follow up about"]
+                    ] + [{"field": "id", "hide": True}],
+                    "defaultColDef": {"resizable": True},
+                    "onRowDoubleClicked": JsCode("function(event) { event.node.setSelected(true, true); }"),
+                    "rowSelection": {"mode": "singleRow", "enableClickSelection": False, "checkboxes": False},
+                },
+                update_on=["rowDoubleClicked", "selectionChanged"],
+                key="followup_grid_" + str(st.session_state.get("followup_grid_epoch", 0)), height=350, allow_unsafe_jscode=True,
+                enable_enterprise_modules=False,
+            )
+            grid_selection = followup_grid.selected_rows
+            grid_task = grid_selection.iloc[0]["id"] if grid_selection is not None and len(grid_selection) else None
+            if grid_task in visible_ids and grid_task != st.session_state.get("last_grid_followup"):
+                st.session_state["selected_followup"] = grid_task
+                st.session_state["last_grid_followup"] = grid_task
+            st.caption("Double-click a row, or use the task picker and Previous / Next below. Navigation does not change the task.")
             selected_task = st.selectbox("Task to review", [t["id"] for t in visible], format_func=lambda tid: next((f"{mapping.get(t.get('contact_id'), 'General task')} · {t['action'][:90]}" for t in visible if t["id"] == tid), tid), key="selected_followup")
             task = next(t for t in visible if t["id"] == selected_task)
             contact = by_id.get(task.get("contact_id"), {})
@@ -429,6 +453,15 @@ if followup_tab is not None:
                                 task["due"] = updated_due.isoformat()
                                 st.session_state["followup_advance"] = {"remaining": remaining}
                                 persist_and_rerun()
+            nav_position = visible_ids.index(task["id"])
+            previous, progress, following = st.columns([1, 2, 1])
+            progress.caption(f"{nav_position + 1} of {len(visible)} matching follow-ups")
+            if previous.button("Previous", disabled=nav_position == 0, key="followup_previous"):
+                st.session_state["followup_advance"] = {"remaining": [visible_ids[nav_position - 1]]}
+                st.rerun()
+            if following.button("Next", disabled=nav_position == len(visible_ids) - 1, key="followup_next"):
+                st.session_state["followup_advance"] = {"remaining": [visible_ids[nav_position + 1]]}
+                st.rerun()
         if not visible:
             st.info("No follow-ups match these filters. Choose All open or clear your search to see other tasks.")
         st.subheader("Communication triggers from verified changes")
@@ -722,4 +755,5 @@ if backup_tab is not None:
                 for key in ["opportunities", "events", "organizations", "suppliers", "review"]:
                     st.subheader(key.capitalize())
                     st.json(metadata.get(key, []), expanded=False)
+
 
