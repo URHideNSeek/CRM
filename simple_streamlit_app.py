@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from crm.digital_twin import ensure_twins, build_twin, change_triggers, public_url
 
-st.set_page_config(page_title="Unseen Robotics CRM", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="UR Contacts", page_icon="🧭", layout="wide")
 st.markdown("<style>.block-container{padding-top:2rem;padding-bottom:2rem} [data-testid=stMetricValue]{font-size:1.8rem}</style>", unsafe_allow_html=True)
 # Authenticate before initializing or rendering any CRM records.
 try:
@@ -26,7 +26,7 @@ if st.session_state.get("authenticated_password_version") != password_version:
     # Discard records if the configured password changes during a session.
     for key in ("contacts", "interactions", "tasks", "source_metadata", "authenticated_password_version"):
         st.session_state.pop(key, None)
-    st.title("Unseen Robotics CRM")
+    st.title("UR Contacts")
     with st.form("sign_in"):
         st.text_input("Password", type="password", key="login_password")
         submitted = st.form_submit_button("Sign in")
@@ -117,7 +117,7 @@ def show(rows):
         st.info("No matching records yet.")
 
 
-st.markdown("## Unseen Robotics CRM")
+st.markdown("## UR Contacts")
 st.caption("Your relationships and next actions")
 if st.session_state.get("save_notice"):
     st.success(st.session_state.pop("save_notice"))
