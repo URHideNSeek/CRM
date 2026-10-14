@@ -8,6 +8,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+from crm.digital_twin import ensure_twins, build_twin, change_triggers, public_url
 
 st.set_page_config(page_title="Unseen Robotics CRM", page_icon="🧭", layout="wide")
 # Authenticate before initializing or rendering any CRM records.
@@ -69,6 +70,7 @@ if database_url:
 
 
 def persist_and_rerun():
+    ensure_twins(st.session_state.contacts, st.session_state.interactions, st.session_state.tasks)
     if database_url:
         try:
             save(database_url, db_version, {
@@ -88,6 +90,7 @@ for collection in ["contacts", "interactions", "tasks"]:
 contacts = st.session_state.contacts
 interactions = st.session_state.interactions
 tasks = st.session_state.tasks
+ensure_twins(contacts, interactions, tasks)
 now = datetime.now(ZoneInfo("America/New_York")).date()
 
 
@@ -272,6 +275,8 @@ with conversation_tab:
                     persist_and_rerun()
 
 with followup_tab:
+    st.subheader("When, what and why to follow up")
+    st.caption("Recorded commitments take priority. Person-specific evidence refines reusable job templates; inferred communication triggers require review.")
     mapping = labels()
     a, b = st.columns(2)
     timing = a.selectbox(
@@ -285,8 +290,8 @@ with followup_tab:
         and (channel == "All" or channel == t["channel"])
     ]
     if visible:
-        a, b, c, d = st.columns([2, 2, 1.5, 4])
-        for column, heading in zip([a, b, c, d], ["Name", "Company", "Contact type", "Next follow-up"]):
+        a, b, c, d, e = st.columns([2, 2, 2, 4, 3])
+        for column, heading in zip([a, b, c, d, e], ["Name", "Company", "When", "What to follow up about", "What this enables"]):
             column.markdown(f"**{heading}**")
     for task in sorted(visible, key=lambda v: v["due"] or "9999-12-31"):
         with st.container(border=True):
@@ -295,11 +300,13 @@ with followup_tab:
             if len(words) < 5:
                 words = ("Complete the next action: " + " ".join(words)).split()
             summary = " ".join(words[:15]) + ("…" if len(words) > 15 else "")
-            a, b, c, d = st.columns([2, 2, 1.5, 4])
+            a, b, c, d, e = st.columns([2, 2, 2, 4, 3])
             a.write(contact.get("name", "") if contact.get("record_type") != "organization" else "")
             b.write(contact.get("organization", ""))
-            c.write(contact.get("kind", "General task"))
+            c.write((task["due"] + " · " + bucket(task)) if task.get("due") else "No fixed date — confirm timing")
             d.write(summary)
+            twin = contact.get("professional_twin", {})
+            e.write(task.get("communication_use") or twin.get("potential_use") or "Complete the recorded next action")
             with st.expander("Details", expanded=False):
                 st.write("**Full next action:** " + task["action"])
                 st.caption(f"Owner: {task['owner']} · Channel: {task['channel']}")
@@ -314,6 +321,11 @@ with followup_tab:
                 method = task.get("method") or ("Email" if contact.get("email") else "Confirm the preferred contact method")
                 st.write("**How:** " + method)
                 st.caption("Suggested approach: reference the last conversation, state the next action, and ask one clear question. Suggestions are based on recorded context; they are not confirmed commitments.")
+                st.write("**Professional model:** " + twin.get("role_template", "Unclassified"))
+                st.caption(twin.get("assignment_basis", "") + "; title does not establish decision authority.")
+                st.write("**Information likely to help:** " + "; ".join(twin.get("template_information_needs", [])))
+                st.write("**Company / parent watch:** " + contact.get("organization", "") + " / " + (twin.get("parent_organization", {}).get("name") or "Parent not yet verified"))
+                st.caption(twin.get("timing_basis", ""))
                 if task.get("original_status"):
                     st.caption("Recorded status: " + task["original_status"])
                 if task["status"] == "Open":
@@ -326,6 +338,79 @@ with followup_tab:
                         persist_and_rerun()
     if not visible:
         st.info("No follow-ups in this view.")
+    st.subheader("Communication triggers from verified changes")
+    queued = {}
+    for person in contacts:
+        if person.get("record_type") == "organization":
+            continue
+        for trigger in change_triggers(person, contacts, now):
+            item = queued.setdefault(trigger["id"], {"trigger": trigger, "people": []})
+            item["people"].append(person)
+    if not queued:
+        st.info("No open verified change triggers. Public monitoring records new person, company and parent changes here; a generic template alone does not create an outreach task.")
+    for event_id, item in queued.items():
+        trigger = item["trigger"]
+        with st.container(border=True):
+            st.write("**When:** " + trigger["when"])
+            st.write("**What:** " + trigger["what"])
+            st.write("**Why this may help:** " + trigger["why"])
+            st.write("**Suggested follow-up:** " + trigger["suggestion"])
+            st.write("**Relevant contacts:** " + ", ".join(p.get("name", "") for p in item["people"]))
+            st.link_button("Public source", trigger["source_url"])
+            st.caption(trigger["basis"])
+            target = st.selectbox("Choose recipient", [p["id"] for p in item["people"]], format_func=lambda cid: mapping.get(cid, cid), key="trigger_target_" + event_id)
+            if st.button("Create follow-up for this trigger", key="trigger_task_" + event_id):
+                stable_id = "T-CHANGE-" + event_id + "-" + target
+                if not any(t["id"] == stable_id for t in tasks):
+                    tasks.append({"id": stable_id, "contact_id": target, "channel": "UR Private BD", "owner": "JJ", "action": trigger["suggestion"], "reason": trigger["why"], "due": now.isoformat(), "priority": "Medium", "status": "Open", "change_event_id": event_id, "source_url": trigger["source_url"]})
+                persist_and_rerun()
+            if st.button("Dismiss trigger", key="trigger_dismiss_" + event_id):
+                for record in contacts:
+                    for event in record.get("monitored_changes", []):
+                        if event.get("id") == event_id:
+                            event["status"] = "Dismissed"
+                persist_and_rerun()
+    with st.expander("Professional twins and monitoring coverage"):
+        people = [c for c in contacts if c.get("record_type") != "organization"]
+        st.write(f"{len(people)} person models; templates are tailored when evidence changes.")
+        st.dataframe([{"Person": c.get("name"), "Company": c.get("organization"), "Template": c["professional_twin"]["role_template"], "Basis": c["professional_twin"]["assignment_basis"], "Parent": c["professional_twin"]["parent_organization"].get("name", "Discovery pending"), "Last public check": c.get("monitoring_last_checked", "Not yet scanned")} for c in people], hide_index=True, use_container_width=True)
+        selected = st.selectbox("Inspect professional twin", [c["id"] for c in people], format_func=lambda cid: mapping.get(cid, cid)) if people else None
+        if selected:
+            st.json(next(c["professional_twin"] for c in people if c["id"] == selected))
+    with st.expander("Record a verified public change"), st.form("record_public_change"):
+        change_target = st.selectbox("Person or organization changed", [c["id"] for c in contacts], format_func=lambda cid: mapping.get(cid, cid)) if contacts else None
+        change_scope = st.selectbox("Change relates to", ["person", "company", "parent"])
+        change_kind = st.selectbox("Change type", ["role_change", "leadership_change", "acquisition", "new_program", "funding", "contract_award", "product_update", "other"])
+        change_summary = st.text_area("Public business change summary")
+        change_reason = st.text_area("Why this could make a communication useful")
+        change_action = st.text_area("Suggested communication")
+        change_url = st.text_input("Public source URL")
+        change_date = st.date_input("Change publication date", now)
+        change_verified = st.checkbox("I verified this business fact against the public source")
+        new_title = st.text_input("New professional title (only for a verified person role change)")
+        if st.form_submit_button("Record public change"):
+            if not change_target or not change_verified or not public_url(change_url) or not change_summary.strip() or not change_reason.strip() or change_date > now:
+                st.error("Select an entity, verify the source, and provide a dated business summary, relevance and public URL.")
+            else:
+                record = next(c for c in contacts if c["id"] == change_target)
+                key = hashlib.sha256((change_target + change_url + change_kind + change_summary).encode()).hexdigest()[:20]
+                if not any(e["id"] == key for e in record.get("monitored_changes", [])):
+                    record.setdefault("monitored_changes", []).append({"id": key, "entity_type": change_scope, "kind": change_kind, "summary": change_summary.strip(), "communication_relevance": change_reason.strip(), "suggested_followup": change_action.strip(), "source_url": change_url, "date": change_date.isoformat(), "verified": True, "status": "Open", "verification_basis": "Operator-confirmed public source"})
+                if change_kind == "role_change" and change_scope == "person" and new_title.strip():
+                    record["title"] = new_title.strip()
+                persist_and_rerun()
+    with st.expander("Verify a company parent relationship"), st.form("verify_parent"):
+        organizations = [c for c in contacts if c.get("record_type") == "organization"]
+        parent_target = st.selectbox("Company", [c["id"] for c in organizations], format_func=lambda cid: mapping.get(cid, cid)) if organizations else None
+        parent_name = st.text_input("Verified parent organization name")
+        parent_source = st.text_input("Parent relationship source URL")
+        if st.form_submit_button("Save verified parent"):
+            if not parent_target or not parent_name.strip() or not public_url(parent_source):
+                st.error("Choose a company and provide the verified parent name and public source.")
+            else:
+                record = next(c for c in organizations if c["id"] == parent_target)
+                record["parent_organization"] = {"name": parent_name.strip(), "source_url": parent_source, "verified_on": now.isoformat(), "basis": "Operator-confirmed public source"}
+                persist_and_rerun()
     with st.expander("Add follow-up"), st.form("followup"):
         action = st.text_input("Action")
         reason = st.text_area("Why follow up / context")
@@ -544,3 +629,4 @@ with backup_tab:
             for key in ["opportunities", "events", "organizations", "suppliers", "review"]:
                 st.subheader(key.capitalize())
                 st.json(metadata.get(key, []), expanded=False)
+
