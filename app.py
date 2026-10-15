@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm.exc import StaleDataError
 
+from crm.event_outreach import suggest_contacts, add_meeting_requests, event_tasks, event_meetings
 from crm.auth import require_user
 from crm.db import session
 from crm.import_export import export_json, import_csvs
@@ -523,6 +524,66 @@ def run(db):
                 )
                 db.commit()
                 st.rerun()
+        st.divider()
+        st.subheader("Pre-event outreach")
+        upcoming = [e for e in all_events if e.event_date and e.event_date >= today() and e.status != "Cancelled"]
+        if upcoming:
+            event_id = st.selectbox("Upcoming conference", [e.id for e in upcoming],
+                                    format_func=lambda x: next(e.name + " · " + str(e.event_date) for e in upcoming if e.id == x))
+            selected_event = db.get(Event, event_id)
+            matches = suggest_contacts(db, selected_event)
+            st.caption("Suggestions use existing CRM text only; they do not confirm attendance. Review before creating tasks.")
+            if matches:
+                show_table([{"Contact": c.name, "Organization": c.organization.name if c.organization else "",
+                             "Matching context": reason} for c, reason in matches[:30]])
+            existing = {t.contact_id for t in event_tasks(db, event_id)}
+            choices = {c.id: f"{c.name} · {c.organization.name if c.organization else 'No organization'}"
+                       for c in all_contacts if c.id not in existing}
+            with st.form("event_outreach_scan"):
+                chosen = st.multiselect("People to request meetings with", list(choices),
+                                        format_func=lambda x: choices[x])
+                due = st.date_input("Outreach due", value=max(today(), selected_event.event_date - timedelta(days=10)),
+                                    max_value=selected_event.event_date)
+                if st.form_submit_button("Add to regular follow-ups"):
+                    count = add_meeting_requests(db, selected_event, chosen, due=due)
+                    db.commit()
+                    st.success(f"Added {count} follow-up tasks; duplicates skipped.")
+                    st.rerun()
+            st.caption(f"{len(existing)} meeting-request task(s) already recorded for this event.")
+        else:
+            st.info("Add an upcoming event to generate meeting-request follow-ups.")
+        st.divider()
+        st.subheader("Event meetings")
+        if all_events:
+            view_event_id = st.selectbox("Meeting schedule for", [e.id for e in all_events],
+                                          format_func=lambda x: next(e.name for e in all_events if e.id == x))
+            meetings = event_meetings(db, view_event_id)
+            show_table([{"When (ET)": i.legacy_data.get("meeting_time"), "With": i.legacy_data.get("meeting_with", ""),
+                         "Where": i.legacy_data.get("meeting_location", ""), "Objective": i.summary}
+                        for i in meetings])
+            st.caption("Enter confirmed meetings here, or record them through a future calendar sync. No calendar is connected to this view yet.")
+            with st.form("event_meeting_entry"):
+                who = st.text_input("Meeting with")
+                when = st.text_input("Date/time (Eastern, YYYY-MM-DD HH:MM)")
+                where = st.text_input("Meeting location / link")
+                objective = st.text_input("Meeting objective")
+                if st.form_submit_button("Record confirmed meeting"):
+                    from datetime import datetime
+                    try:
+                        parsed = datetime.strptime(when, "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        st.error("Use YYYY-MM-DD HH:MM for meeting date/time.")
+                    else:
+                        if not who.strip() or not objective.strip():
+                            st.error("Contact and objective are required.")
+                        else:
+                            db.add(Interaction(event_id=view_event_id, occurred_on=parsed.date(),
+                                summary=objective.strip(), kind="Meeting", channel="UR Events",
+                                legacy_data={"meeting_time": when, "meeting_with": who.strip(),
+                                             "meeting_location": where.strip()},
+                                provenance="User-entered confirmed event meeting"))
+                            db.commit()
+                            st.rerun()
     elif page == "Follow-ups":
         a, b, c = st.columns(3)
         timing = a.selectbox(
