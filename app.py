@@ -177,30 +177,10 @@ def contact_form(db, item=None):
 def run(db):
     header(page)
 
-    # Streamlit reruns the script for nearly every UI interaction. Only load the
-    # record sets required by the current page so remote PostgreSQL egress scales
-    # with the view being used instead of the size of the entire CRM.
-    contact_pages = {"Overview", "Contacts", "Opportunities", "Customer insights", "Follow-ups"}
-    task_pages = {"Overview", "Contacts", "Follow-ups"}
-    opportunity_pages = {"Overview", "Contacts", "Opportunities", "Customer insights", "Follow-ups"}
-    event_pages = {"Contacts", "Events"}
-
-    all_contacts = contacts(db) if page in contact_pages else []
-    all_tasks = (
-        list(db.scalars(select(Task).order_by(Task.due_date.asc().nulls_last())))
-        if page in task_pages
-        else []
-    )
-    all_opps = (
-        list(db.scalars(select(Opportunity).order_by(Opportunity.name)))
-        if page in opportunity_pages
-        else []
-    )
-    all_events = (
-        list(db.scalars(select(Event).order_by(Event.event_date.desc().nulls_last())))
-        if page in event_pages
-        else []
-    )
+    all_contacts = contacts(db)
+    all_tasks = list(db.scalars(select(Task).order_by(Task.due_date.asc().nulls_last())))
+    all_opps = list(db.scalars(select(Opportunity).order_by(Opportunity.name)))
+    all_events = list(db.scalars(select(Event).order_by(Event.event_date.desc().nulls_last())))
 
     contact_labels = options(
         all_contacts, lambda c: f"{c.name} · {c.organization.name if c.organization else 'No organization'}"
