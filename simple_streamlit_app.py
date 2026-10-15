@@ -6,6 +6,7 @@ import hashlib
 import hmac
 from datetime import date, datetime, timedelta
 from uuid import uuid4
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -61,29 +62,45 @@ try:
     database_url = st.secrets.get("DATABASE_URL", "")
 except FileNotFoundError:
     database_url = ""
+# Keep reads scoped to the authenticated session, never a shared data cache.
+low_cost_browsing = st.sidebar.checkbox("Low-cost browsing", value=True,
+    help="Reuse loaded CRM data for up to 10 minutes while browsing. Saves still check the database version. Use Refresh CRM data for changes from other chats.") if database_url else False
 if database_url:
-    try:
-        db_version, db_payload = load(database_url)
-        for collection in ["contacts", "interactions", "tasks"]:
-            st.session_state[collection] = db_payload.get(collection, [])
-        st.session_state["crm_source_metadata"] = db_payload.get("source_metadata", {})
-    except Exception:
-        st.error("Unable to connect to the CRM database. Check the database configuration.")
-        st.stop()
+    snapshot_expired = monotonic() - st.session_state.get("crm_loaded_at", float("-inf")) >= 600
+    if (not low_cost_browsing or snapshot_expired
+            or st.session_state.get("crm_database_key") != hashlib.sha256(database_url.encode()).hexdigest()
+            or "crm_db_version" not in st.session_state
+            or any(key not in st.session_state for key in ["contacts", "interactions", "tasks"])):
+        try:
+            db_version, db_payload = load(database_url)
+            for collection in ["contacts", "interactions", "tasks"]:
+                st.session_state[collection] = db_payload.get(collection, [])
+            st.session_state["crm_source_metadata"] = db_payload.get("source_metadata", {})
+            st.session_state["crm_db_version"] = db_version
+            st.session_state["crm_loaded_at"] = monotonic()
+            st.session_state["crm_database_key"] = hashlib.sha256(database_url.encode()).hexdigest()
+        except Exception:
+            st.error("Unable to connect to the CRM database. Check the database configuration.")
+            st.stop()
+    db_version = st.session_state["crm_db_version"]
 
 
 def persist_and_rerun():
     ensure_twins(st.session_state.contacts, st.session_state.interactions, st.session_state.tasks)
     if database_url:
         try:
-            save(database_url, db_version, {
+            saved_version = save(database_url, db_version, {
                 **{key: st.session_state[key] for key in ["contacts", "interactions", "tasks"]},
                 "source_metadata": st.session_state.get("crm_source_metadata", {}),
             })
+            st.session_state["crm_db_version"] = saved_version
+            st.session_state["crm_loaded_at"] = monotonic()
         except ConflictError:
+            st.session_state.pop("crm_loaded_at", None)
             st.error("Someone updated the CRM first. Reload and apply your change again.")
             st.stop()
         except Exception:
+            st.session_state.pop("crm_loaded_at", None)
             st.error("Could not save to the database. Your change has not been saved.")
             st.stop()
     st.session_state["save_notice"] = "Saved to CRM." if database_url else "Saved for this session."
@@ -156,7 +173,10 @@ if st.session_state.get("save_notice"):
     st.success(st.session_state.pop("save_notice"))
 if database_url:
     st.sidebar.caption("Connected · changes save when submitted")
+    if low_cost_browsing:
+        st.sidebar.caption("Low-cost mode · data refreshes on activity after 10 minutes; no background polling.")
     if st.sidebar.button("Refresh CRM data"):
+        st.session_state.pop("crm_loaded_at", None)
         st.rerun()
 else:
     st.warning("Session-only mode: configure DATABASE_URL for permanent storage. Download a backup before closing.")
@@ -798,6 +818,7 @@ if backup_tab is not None:
                 for key in ["opportunities", "events", "organizations", "suppliers", "review"]:
                     st.subheader(key.capitalize())
                     st.json(metadata.get(key, []), expanded=False)
+
 
 
 
