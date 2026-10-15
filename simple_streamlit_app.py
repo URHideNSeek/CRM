@@ -111,6 +111,38 @@ def labels():
     return {c["id"]: " · ".join(filter(None, [c.get("name"), c.get("organization")])) or c["id"] for c in contacts}
 
 
+def primary_mailbox(contact, history):
+    """Most evidenced UR mailbox; dedupe archive/contact/interaction copies."""
+    messages = {}
+    for record in [contact, *history]:
+        sources = record.get("source_mail", [])
+        if isinstance(sources, dict):
+            sources = [sources]
+        for source in sources:
+            mailbox = str(source.get("mailbox", "")).strip().lower()
+            if not mailbox.endswith("@unseenrobotics.com"):
+                continue
+            identity = source.get("message_id") or source.get("raw_message_sha256") or source.get("archive_path")
+            if not identity:
+                continue
+            key = (mailbox, identity)
+            messages[key] = max(messages.get(key, ""), str(source.get("timestamp") or ""))
+    counts, latest = {}, {}
+    for (mailbox, _), timestamp in messages.items():
+        counts[mailbox] = counts.get(mailbox, 0) + 1
+        latest[mailbox] = max(latest.get(mailbox, ""), timestamp)
+    if not counts:
+        return {"mailbox": "Not established", "basis": "No message-level UR mailbox provenance recorded.", "alternates": []}
+    ranked = sorted(counts, key=lambda box: (counts[box], latest[box], box), reverse=True)
+    winner = ranked[0]
+    return {"mailbox": winner, "basis": f"Most recorded messages: {counts[winner]}; ties use most recent recorded message. Based on CRM evidence, not a live mailbox scan.", "alternates": ranked[1:]}
+
+mail_history = {}
+for interaction in interactions:
+    mail_history.setdefault(interaction.get("contact_id"), []).append(interaction)
+mail_channels = {c["id"]: primary_mailbox(c, mail_history.get(c["id"], [])) for c in contacts}
+
+
 def show(rows):
     if rows:
         st.dataframe(rows, hide_index=True, use_container_width=True)
@@ -145,14 +177,14 @@ if contact_tab is not None:
             if contact.get("record_type") == "organization":
                 contact["name"] = ""
         rows = [{"Name": v["name"], "Organization": v["organization"],
-                 "Relationship type": v["kind"], "NDA": nda_indicator(v, now), "id": v["id"]} for v in contacts]
+                 "Relationship type": v["kind"], "UR email channel": mail_channels[v["id"]]["mailbox"], "NDA": nda_indicator(v, now), "id": v["id"]} for v in contacts]
         grid = AgGrid(
-            pd.DataFrame(rows, columns=["Name", "Organization", "Relationship type", "NDA", "id"]),
+            pd.DataFrame(rows, columns=["Name", "Organization", "Relationship type", "UR email channel", "NDA", "id"]),
             gridOptions={
                 "columnDefs": [
                     {"field": field, "filter": "agTextColumnFilter", "floatingFilter": True,
                      "filterParams": {"debounceMs": 100}}
-                    for field in ["Name", "Organization", "Relationship type", "NDA"]
+                    for field in ["Name", "Organization", "Relationship type", "UR email channel", "NDA"]
                 ] + [{"field": "id", "hide": True}],
                 "defaultColDef": {"sortable": True, "resizable": True, "flex": 1},
                 "onRowDoubleClicked": JsCode("function(event) { event.node.setSelected(true, true); }"),
@@ -176,6 +208,11 @@ if contact_tab is not None:
         st.subheader("Contact details" if existing else "Add a contact")
         if existing:
             st.info("NDA: " + nda_indicator(existing, now))
+            email_channel = mail_channels[existing["id"]]
+            st.write("**Primary UR email channel:** " + email_channel["mailbox"])
+            st.caption(email_channel["basis"])
+            if email_channel["alternates"]:
+                st.caption("Also used: " + ", ".join(email_channel["alternates"]))
             st.write(existing.get("latest_business_summary") or existing.get("background_summary") or "No relationship summary recorded.")
             with st.expander("Full notes and source history"):
                 st.write(existing.get("notes") or "No relationship notes recorded.")
@@ -355,6 +392,7 @@ if followup_tab is not None:
             followup_rows = [{
                 "Who": by_id.get(t.get("contact_id"), {}).get("name") or by_id.get(t.get("contact_id"), {}).get("organization") or "General task",
                 "Company": by_id.get(t.get("contact_id"), {}).get("organization", ""),
+                "UR email channel": mail_channels.get(t.get("contact_id"), {}).get("mailbox", "Not established"),
                 "When": t.get("due") or "Needs a date",
                 "Status": bucket(t),
                 "NDA": nda_indicator(by_id.get(t.get("contact_id"), {}), now),
@@ -366,7 +404,7 @@ if followup_tab is not None:
                 gridOptions={
                     "columnDefs": [
                         {"field": field, "flex": 3 if field == "What to follow up about" else 1, "minWidth": 110}
-                        for field in ["Who", "Company", "When", "Status", "NDA", "What to follow up about"]
+                        for field in ["Who", "Company", "UR email channel", "When", "Status", "NDA", "What to follow up about"]
                     ] + [{"field": "id", "hide": True}],
                     "defaultColDef": {"resizable": True},
                     "onRowDoubleClicked": JsCode("function(event) { event.node.setSelected(true, true); }"),
@@ -399,6 +437,11 @@ if followup_tab is not None:
                 st.write("**Recommended next step:** " + (task.get("recommendation") or task["action"]))
                 method = task.get("method") or ("Email" if contact.get("email") else "Confirm the preferred contact method")
                 st.write("**How:** " + method)
+                email_channel = mail_channels.get(contact.get("id"), {"mailbox": "Not established", "basis": "No message-level mailbox evidence.", "alternates": []})
+                st.write("**Primary UR email channel:** " + email_channel["mailbox"])
+                st.caption(email_channel["basis"])
+                if email_channel["alternates"]:
+                    st.caption("Also used: " + ", ".join(email_channel["alternates"]))
                 st.caption("Suggested approach: reference the last conversation, state the next action, and ask one clear question. Suggestions are based on recorded context; they are not confirmed commitments.")
                 with st.expander("Professional context and monitoring"):
                     st.write("**Professional model:** " + twin.get("role_template", "Unclassified"))
@@ -755,5 +798,6 @@ if backup_tab is not None:
                 for key in ["opportunities", "events", "organizations", "suppliers", "review"]:
                     st.subheader(key.capitalize())
                     st.json(metadata.get(key, []), expanded=False)
+
 
 
