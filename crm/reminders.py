@@ -70,7 +70,7 @@ def main():
                 raise SystemExit(1) from None
         if not args.loop:
             break
-        # An hourly check is sufficient for the daily in-app reminder queue and\n        # avoids waking a remote autoscaling database every minute.\n        time.sleep(3600)
+        time.sleep(60)
 
 
 if __name__ == "__main__":
