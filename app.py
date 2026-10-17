@@ -3,7 +3,7 @@ from collections import Counter
 from datetime import timedelta
 
 import streamlit as st
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -11,6 +11,7 @@ from crm.auth import require_user
 from crm.db import session
 from crm.import_export import export_json, import_csvs
 from crm.models import Contact, Event, Insight, Interaction, Opportunity, Organization, Task, utcnow
+from crm.nda import indicator as nda_indicator
 from crm.reminders import active_reminders, generate
 from crm.service import (
     CHANNELS,
@@ -361,20 +362,160 @@ def run(db):
             show_table([task_row(t) for t in all_tasks if t.contact_id == selected])
     elif page == "Organizations":
         orgs = list(db.scalars(select(Organization).order_by(Organization.name)))
+        search_col, type_col = st.columns([2, 1])
+        org_search = search_col.text_input("Search organizations", placeholder="Name, type, website, or notes")
+        org_types = sorted({o.kind for o in orgs if o.kind})
+        org_kind = type_col.selectbox("Organization type", [None, *org_types], format_func=lambda x: x or "All types")
+        query = org_search.casefold().strip()
+        filtered_orgs = [
+            o for o in orgs
+            if (not org_kind or o.kind == org_kind)
+            and (not query or query in " ".join([o.name, o.kind, o.website or "", o.notes or ""]).casefold())
+        ]
+        st.caption(f"{len(filtered_orgs)} of {len(orgs)} organizations · Search and type filters only narrow this list.")
         show_table(
-            [{"Organization": o.name, "Type": o.kind, "Website": o.website, "Notes": o.notes} for o in orgs]
+            [
+                {
+                    "Organization": o.name,
+                    "Type": o.kind,
+                    "POCs": sum(c.organization_id == o.id for c in all_contacts),
+                    "Website": o.website,
+                }
+                for o in filtered_orgs
+            ]
         )
-        with st.form("org"):
-            name = st.text_input("Organization name")
-            kind = st.selectbox(
-                "Organization type", ["Company", "Government", "University", "Investor", "Other"]
+        selected_org_id = choose("Open organization", options(filtered_orgs, lambda o: f"{o.name} · {o.kind}"))
+        if selected_org_id:
+            item = db.get(Organization, selected_org_id)
+            people = [c for c in all_contacts if c.organization_id == item.id]
+            person_ids = {c.id for c in people}
+            history = list(
+                db.scalars(
+                    select(Interaction)
+                    .where(or_(Interaction.organization_id == item.id, Interaction.contact_id.in_(person_ids)))
+                    .order_by(Interaction.occurred_on.desc(), Interaction.created_at.desc())
+                )
             )
-            website = st.text_input("Website")
-            notes = st.text_area("Organization context")
-            if st.form_submit_button("Add organization"):
-                organization(db, name, kind=kind, website=website, notes=notes)
-                db.commit()
-                st.rerun()
+            person_by_id = {c.id: c for c in people}
+            linked_tasks = [t for t in all_tasks if t.contact_id in person_ids]
+            open_tasks = [t for t in linked_tasks if t.status == "Open"]
+            linked_opportunities = [
+                o for o in all_opps if o.organization_id == item.id or o.contact_id in person_ids
+            ]
+            latest = history[0] if history else None
+            last_contact = latest.occurred_on if latest else None
+
+            st.subheader(item.name)
+            st.caption(" · ".join(v for v in [item.kind, item.website] if v))
+            overview_tab, people_tab, history_tab, nda_tab = st.tabs(
+                ["Overview", "POCs & roles", "Communication", "NDA"]
+            )
+            with overview_tab:
+                a, b, c, d = st.columns(4)
+                a.metric("Points of contact", len(people))
+                b.metric("Recorded conversations", len(history))
+                c.metric("Open follow-ups", len(open_tasks))
+                d.metric("Last conversation", str(last_contact) if last_contact else "Not recorded")
+                with st.container(border=True):
+                    st.markdown("**Current communication state**")
+                    if latest:
+                        st.caption(f"Latest recorded contact: {latest.occurred_on} · {latest.kind} · {latest.channel}")
+                        st.write(latest.summary)
+                        st.write("**Next step:** " + (latest.next_step or "No next step recorded"))
+                    else:
+                        st.info("No conversation is linked to this organization or its POCs yet.")
+                    if open_tasks:
+                        st.write("**Open follow-ups**")
+                        show_table(
+                            [
+                                {
+                                    "Action": t.title,
+                                    "POC": t.contact.name if t.contact else "",
+                                    "Owner": t.owner,
+                                    "Due": t.due_date or "Unscheduled",
+                                    "Timing": task_bucket(t),
+                                }
+                                for t in sorted(open_tasks, key=lambda t: (t.due_date is None, t.due_date or today()))
+                            ]
+                        )
+                if linked_opportunities:
+                    st.markdown("**Related opportunities**")
+                    show_table(
+                        [
+                            {"Opportunity": o.name, "Stage": o.stage, "Primary contact": o.contact.name if o.contact else "", "Next action": o.next_action}
+                            for o in linked_opportunities
+                        ]
+                    )
+                if item.notes:
+                    st.markdown("**Organization context**")
+                    st.write(item.notes)
+                if item.provenance:
+                    st.caption("Source: " + item.provenance)
+            with people_tab:
+                show_table(
+                    [
+                        {
+                            "Point of contact": c.name,
+                            "Role / title": c.title or "Not recorded",
+                            "Email": c.email or "",
+                            "Relationship": c.relationship_type,
+                            "Owner": c.owner,
+                            "Status": c.status,
+                            "Last contact": c.last_contact or "Not recorded",
+                        }
+                        for c in people
+                    ]
+                )
+                if not people:
+                    st.info("No people are linked to this organization. Add or link a contact from Contacts.")
+            with history_tab:
+                show_table(
+                    [
+                        {
+                            "Date": i.occurred_on,
+                            "Contact": person_by_id[i.contact_id].name if i.contact_id in person_by_id else "Organization-level",
+                            "Type": i.kind,
+                            "Channel": i.channel,
+                            "Summary": i.summary,
+                            "Next step": i.next_step or "",
+                            "Source": i.provenance,
+                        }
+                        for i in history
+                    ]
+                )
+                if not history:
+                    st.info("No communication history is linked to this organization or its POCs.")
+            with nda_tab:
+                legacy = item.legacy_data if isinstance(item.legacy_data, dict) else {}
+                nda = legacy.get("nda")
+                if not isinstance(nda, dict):
+                    nda = legacy.get("agreements", {}).get("nda") if isinstance(legacy.get("agreements"), dict) else None
+                if isinstance(nda, str):
+                    nda = {"status": nda}
+                nda = nda if isinstance(nda, dict) else {}
+                status = nda_indicator(nda)
+                st.metric("NDA status", status)
+                if nda.get("effective_date"):
+                    st.write("**Effective date:** " + str(nda["effective_date"]))
+                if nda.get("expiration_date"):
+                    st.write("**Expiration date:** " + str(nda["expiration_date"]))
+                if nda.get("evidence_reference"):
+                    st.write("**Evidence reference:** " + str(nda["evidence_reference"]))
+                if not nda:
+                    st.info("No structured NDA record is attached. Status stays Unknown until agreement status and evidence are recorded.")
+                st.caption("An offer or a mention in notes does not confirm execution. This view does not store or display agreement text.")
+        with st.expander("Add organization", expanded=not orgs):
+            with st.form("org"):
+                name = st.text_input("Organization name")
+                kind = st.selectbox(
+                    "Organization type", ["Company", "Government", "University", "Investor", "Other"]
+                )
+                website = st.text_input("Website")
+                notes = st.text_area("Organization context")
+                if st.form_submit_button("Add organization"):
+                    organization(db, name, kind=kind, website=website, notes=notes)
+                    db.commit()
+                    st.rerun()
     elif page == "Opportunities":
         filter_channel = st.selectbox("Filter channel", [None, *CHANNELS], format_func=lambda x: x or "All")
         filtered = [o for o in all_opps if not filter_channel or o.channel == filter_channel]

@@ -96,3 +96,57 @@ def test_populated_dashboard_quick_actions_and_pipeline(db, monkeypatch):
     app.sidebar.radio[0].set_value("Opportunities").run()
     assert not app.exception and not app.error
     assert any("Engage" in heading.value for heading in app.subheader)
+
+
+def test_organization_workspace_shows_people_history_followups_and_nda(db, monkeypatch):
+    from datetime import timedelta
+
+    from crm.models import Task
+    from crm.service import add_interaction, organization, save_contact, today
+
+    monkeypatch.setenv("AUTH_MODE", "local")
+    org = organization(db, "Example Partner", kind="Partner", website="https://example.test")
+    org.legacy_data = {
+        "nda": {
+            "status": "Executed",
+            "both_parties_signed": True,
+            "coverage_confirmed": True,
+            "evidence_reference": "nda-record-1",
+            "effective_date": "2026-10-01",
+        }
+    }
+    contact = save_contact(
+        db,
+        name="Avery Contact",
+        title="Program Manager",
+        organization_id=org.id,
+        relationship_type="Partner",
+        owner="JJ",
+    )
+    add_interaction(
+        db,
+        summary="Discussed a demonstration and teaming fit.",
+        occurred_on=today(),
+        contact_id=contact.id,
+        kind="Call",
+        channel="UR Partners",
+        next_step="Send the demo outline",
+    )
+    db.add(Task(title="Send the demo outline", contact_id=contact.id, due_date=today() + timedelta(days=2)))
+    db.flush()
+
+    @contextmanager
+    def test_session():
+        yield db
+
+    monkeypatch.setattr("crm.db.session", test_session)
+    app = AppTest.from_file(str(Path(__file__).parents[1] / "app.py"), default_timeout=20).run()
+    app.sidebar.radio[0].set_value("Organizations").run()
+    next(w for w in app.selectbox if w.label == "Open organization").set_value(org.id).run()
+
+    assert not app.exception and not app.error
+    assert any(m.label == "Points of contact" and m.value == "1" for m in app.metric)
+    assert any(m.label == "Open follow-ups" and m.value == "1" for m in app.metric)
+    assert any("Current communication state" in e.value for e in app.markdown)
+    assert any("Program Manager" in str(frame.value) for frame in app.dataframe)
+    assert {tab.label for tab in app.tabs} >= {"Overview", "POCs & roles", "Communication", "NDA"}
