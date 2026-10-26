@@ -10,7 +10,7 @@ from crm.service import task_bucket, today, update_task
 DESCRIPTIONS = {
     "Overview": "Know who needs your attention, what you promised, and what moves forward next.",
     "Contacts": "One shared relationship record, with the channels that captured and use it.",
-    "Organizations": "Connect people to the companies, agencies, and institutions behind them.",
+    "Organizations": "Search each organization’s POCs, conversation history, next steps, and NDA evidence.",
     "Opportunities": "Track each relationship from an introduction to a concrete outcome.",
     "Customer insights": "Keep customer needs and feedback connected to product and pursuit decisions.",
     "Events": "Turn event conversations into lasting relationships and next actions.",
