@@ -57,10 +57,58 @@ def upsert(collection: str, record_id: str, change: Change, actor: Principal = D
         if all(existing.get(k) == v for k, v in change.record.items()):
             return {'version': version, 'id': record_id}
         raise HTTPException(409, 'Interactions are append-only; use a new ID')
-    record = {**(existing or {}), **change.record, 'id': record_id}
-    required = {'contacts': ['name','organization','email','kind','owner','captured_by','used_by','notes'], 'interactions': ['contact_id','channel','date','summary','next_action'], 'tasks': ['contact_id','channel','owner','action','due','priority','status']}[collection]
-    if any(k not in record for k in required):
-        raise HTTPException(422, 'Missing required fields')
+    changes = dict(change.record)
+
+    # Accept the field names used by common CRM callers while storing one
+    # canonical shape in the shared snapshot.
+    aliases = {
+        'contacts': {
+            'organization': ('organization_name',),
+            'kind': ('relationship_type', 'type'),
+            'used_by': ('used_channels',),
+        },
+        'interactions': {
+            'date': ('occurred_on',),
+            'next_action': ('next_step',),
+        },
+        'tasks': {
+            'action': ('title', 'task'),
+            'due': ('due_date',),
+        },
+    }[collection]
+    for canonical, alternatives in aliases.items():
+        if canonical not in changes:
+            for alternative in alternatives:
+                if alternative in changes:
+                    changes[canonical] = changes[alternative]
+                    break
+        for alternative in alternatives:
+            changes.pop(alternative, None)
+
+    record = {**(existing or {}), **changes, 'id': record_id}
+    defaults = {
+        'contacts': {
+            'organization': '', 'email': '', 'kind': 'Other', 'owner': 'JJ',
+            'captured_by': actor.channel, 'used_by': [], 'notes': '', 'status': 'New',
+        },
+        'interactions': {'channel': actor.channel, 'next_action': ''},
+        'tasks': {
+            'contact_id': None, 'channel': actor.channel, 'owner': 'JJ', 'due': '',
+            'priority': 'Medium', 'status': 'Open',
+        },
+    }[collection]
+    for key, value in defaults.items():
+        if key not in record or record[key] is None:
+            record[key] = value
+
+    required = {
+        'contacts': ['name', 'organization', 'email', 'kind', 'owner', 'captured_by', 'used_by', 'notes'],
+        'interactions': ['contact_id', 'date', 'summary', 'next_action'],
+        'tasks': ['contact_id', 'action', 'channel', 'owner', 'due', 'priority', 'status'],
+    }[collection]
+    missing = [key for key in required if key not in record or record[key] is None]
+    if missing:
+        raise HTTPException(422, f"Missing required field: {', '.join(missing)}")
     if any(not isinstance(record[k], str) for k in required if k not in ['used_by','contact_id']):
         raise HTTPException(422, 'Invalid field type')
     if collection == 'contacts' and (not isinstance(record['used_by'], list) or not all(isinstance(v,str) for v in record['used_by'])):
